@@ -17,6 +17,8 @@ The app also includes an AI chat assistant that can answer food-related question
   
 ## 2. ERD
 
+
+
 ## 3. Tech Stack
 - **Frontend:** HTML, CSS, and JavaScript
 - **Database & Backend:** Supabase (PostgreSQL)
