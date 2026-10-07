@@ -16,7 +16,7 @@ The app also includes an AI chat assistant that can answer food-related question
 - Browse food reels for meal and recipe inspiration
   
 ## 2. ERD
-
+- Refer to ERD file in main repository
 
 
 ## 3. Tech Stack
