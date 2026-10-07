@@ -36,3 +36,5 @@ The app also includes an AI chat assistant that can answer food-related question
 5. The application should now be ready to use.
 6. 
 ## 5. Verifying the Vertical Slice
+
+https://www.loom.com/share/f1217a66e8ac4b10ac3b5b63869b1802
