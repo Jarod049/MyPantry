@@ -29,5 +29,10 @@ The app also includes an AI chat assistant that can answer food-related question
 - **Version Control:** GitHub
 
 ## 4. How to Get It Running
-
+1. Clone or download this GitHub repository.
+2. Open the project folder on your computer.
+3. Locate the `index.html` file.
+4. Open `index.html` in your preferred web browser.
+5. The application should now be ready to use.
+6. 
 ## 5. Verifying the Vertical Slice
