@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MyPantry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400..800&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>[hidden]{display:none!important}</style>
+</head>
+<body>
+<div class="stage">
+  <aside class="guide" id="guide" aria-label="Usability test guide">
+    <div class="guide-brand">
+      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#1d6a4c"/><path d="M14 20h20v14a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V20Z" fill="#fff"/><path d="M12 16h24v4H12z" fill="#b9e4cd"/><path d="M24 11c3 0 5 2 5 5h-10c0-3 2-5 5-5Z" fill="#f2b632"/><circle cx="24" cy="28" r="3.2" fill="#1d6a4c"/></svg>
+      <div>
+        <div class="eyebrow">Group 5 · High-fidelity prototype</div>
+        <h1>MyPantry test guide</h1>
+      </div>
+    </div>
+    <p>MyPantry tracks the food you already own, warns you before it spoils, and suggests easy recipes you can make right now. Everything on the phone is clickable. Camera scans are simulated, so no real camera is needed.</p>
+
+    <div class="persona">
+      <div class="av">K</div>
+      <div><b>You are Karen, mother of 7</b><span>Busy schedule. Food gets pushed to the back of the pantry, she forgets what she has at the store, and she finds spoiled ingredients mid-recipe.</span></div>
+    </div>
+
+    <h2>Demo sign-in</h2>
+    <div class="cred">
+      <span>Email</span><code>karen@mypantry.app</code>
+      <span>Password</span><code>Pantry#Demo2026</code>
+    </div>
+
+    <h2>Tasks for the participant</h2>
+    <ol class="tasks" id="taskList"></ol>
+
+    <h2>Debrief questions</h2>
+    <ol class="debrief">
+      <li>Which task felt hardest, and why?</li>
+      <li>Did you trust the spoil dates? What would make you trust them more?</li>
+      <li>Would the recipe reels change what you cook this week?</li>
+      <li>On a scale of 1 to 7, how easy was it to log groceries?</li>
+      <li>What would stop you from using this app every week?</li>
+    </ol>
+
+    <h2>Facilitator tools</h2>
+    <div class="tools">
+      <button type="button" data-tool="reset">Restart prototype</button>
+      <button type="button" data-tool="skip">Skip sign-in</button>
+      <button type="button" data-tool="sample">Load sample pantry</button>
+      <button type="button" data-tool="empty">Empty the pantry</button>
+    </div>
+    <p class="guide-foot">Aaron Pace · Jared Thompson · Ryan Gardanier · Alan Lozoya. Built from the PDR and Module 4 screen specs.</p>
+  </aside>
+
+  <div class="device-wrap">
+    <div class="device">
+      <div class="phone" id="phone">
+        <div class="statusbar" aria-hidden="true">
+          <span class="num" id="clock">9:41</span>
+          <span class="island"></span>
+          <span class="icons">
+            <svg viewBox="0 0 17 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="currentColor"/><rect x="4.5" y="5.5" width="3" height="6.5" rx="1" fill="currentColor"/><rect x="9" y="3" width="3" height="9" rx="1" fill="currentColor"/><rect x="13.5" y="0" width="3" height="12" rx="1" fill="currentColor"/></svg>
+            <svg viewBox="0 0 25 12"><rect x=".5" y=".5" width="21" height="11" rx="3.5" fill="none" stroke="currentColor" opacity=".5"/><rect x="2" y="2" width="16" height="8" rx="2" fill="currentColor"/><rect x="23" y="4" width="1.6" height="4" rx=".8" fill="currentColor" opacity=".5"/></svg>
+          </span>
+        </div>
+        <div id="app" class="view"></div>
+      </div>
+    </div>
+    <div class="device-note">Tip: scroll inside the phone. Swipe or scroll up in Reels to see the next recipe.</div>
+  </div>
+  <button type="button" class="guide-toggle" id="guideToggle">Test guide</button>
+</div>
+<!-- Supabase client, then config.js (made from .env by `npm start`, never committed), then the app -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<script src="config.js" onerror="console.warn('config.js not found: running the offline demo. Run npm start to connect Supabase.')"></script>
+<script src="app.js"></script>
+</body>
+</html>
