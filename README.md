@@ -36,5 +36,11 @@ The app also includes an AI chat assistant that can answer food-related question
 5. The application should now be ready to use.
    
 ## 5. Verifying the Vertical Slice
-
 https://www.loom.com/share/f1217a66e8ac4b10ac3b5b63869b1802
+- Upon loading the app, use the developer tools on the left or bottom of the page and press "Skip sign in"
+- Go to the reels tab
+- Save a reel
+- Confirm the reel has moved to the saved tab on the top right
+- Refresh the page
+- Repeat the sign in process and go back to the reels tab
+- Go into the saved reels section on the top right again, the reel previously saved should still be there
