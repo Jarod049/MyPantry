@@ -8,6 +8,8 @@ Users can track food in their fridge and pantry, including expiration dates, so 
 
 The app also includes an AI chat assistant that can answer food-related questions, recommend recipes, and help users decide what to make. Users can also browse food reels for meal inspiration and discover new ways to use the ingredients they already have.
 
+Here is our demo: https://mypantry123.netlify.app/
+
 ### Key Features
 - Track food stored in the fridge and pantry
 - Track expiration dates and identify food that should be used soon
