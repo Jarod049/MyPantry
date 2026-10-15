@@ -22,12 +22,14 @@ through the database. New rows use the signed-in Auth UUID, never shared user 1.
    and verify it remains. Repeat using a reviewed receipt scan. Verify a second
    account cannot see it.
 
-The migration has not been applied: automatic approval review rejected the
-production constraint/permission change pending explicit user approval.
+The user approved the production migration on 15 October 2026, and it was applied
+as pantry_authenticated_insert. Existing pantry rows were preserved.
 
 Validation: 28 local tests pass, including manual insert/reload, scanned batch
 insert/reload, failed inserts, duplicate clicks, and logout during an insert.
-These use a simulated database; live Supabase validation is still pending.
+The UI tests use a simulated database. Live Supabase role checks also passed:
+authenticated insert/read/update, cross-account read/update denial, forged-owner
+insert denial, and anonymous read/insert denial. Test rows were rolled back.
 
 Scope: this fixes ingredient creation and storage/expiry edits. The prototype's
 delete, recipe-consumption, and reset flows still need separate database writes.
