@@ -1,5 +1,7 @@
-# Local connection settings and generated deployment output
-config.js
 .env
 .env.*
+!.env.example
+config.js
 _site/
+dist/
+node_modules/

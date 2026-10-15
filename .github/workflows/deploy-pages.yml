@@ -42,12 +42,12 @@ jobs:
             throw new Error('SUPABASE_URL must use HTTPS.');
           }
           fs.mkdirSync('_site', { recursive: true });
-          for (const file of ['index.html', 'app.js', 'styles.css']) {
+          for (const file of ['index.html', 'app.js', 'auth.js', 'styles.css']) {
             fs.copyFileSync(file, '_site/' + file);
           }
           fs.writeFileSync('_site/config.js',
             'window.MYPANTRY_CONFIG = ' +
-            JSON.stringify({ supabaseUrl: url, supabaseKey: key, demoUserId: 1 }) +
+            JSON.stringify({ supabaseUrl: url, supabaseKey: key, demoMode: false }) +
             ';\n');
           NODE
       - name: Configure Pages
@@ -59,3 +59,4 @@ jobs:
       - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4
+
