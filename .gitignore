@@ -1,0 +1,5 @@
+# Local connection settings and generated deployment output
+config.js
+.env
+.env.*
+_site/
