@@ -8,7 +8,7 @@ Users can track food in their fridge and pantry, including expiration dates, so 
 
 The app also includes an AI chat assistant that can answer food-related questions, recommend recipes, and help users decide what to make. Users can also browse food reels for meal inspiration and discover new ways to use the ingredients they already have.
 
-Here is our demo: https://mypantry123.netlify.app/
+Here is our demo: https://jarod049.github.io/MyPantry/
 
 ### Key Features
 - Track food stored in the fridge and pantry
@@ -30,19 +30,37 @@ Here is our demo: https://mypantry123.netlify.app/
 - **Development:** AI-assisted development
 - **Version Control:** GitHub
 
-## 4. How to Get It Running
-1. Clone or download this GitHub repository.
-2. Open the project folder on your computer.
-3. Locate the `index.html` file.
-4. Open `index.html` in your preferred web browser.
-5. The application should now be ready to use.
-   
-## 5. Verifying the Vertical Slice
-https://www.loom.com/share/f1217a66e8ac4b10ac3b5b63869b1802
-- Upon loading the app, use the developer tools on the left or bottom of the page and press "Skip sign in"
-- Go to the reels tab
-- Save a reel
-- Confirm the reel has moved to the saved tab on the top right
-- Refresh the page
-- Repeat the sign in process and go back to the reels tab
-- Go into the saved reels section on the top right again, the reel previously saved should still be there
+## 4. Run locally
+
+Requires Node.js 22 or later.
+
+1. Run `npm ci`.
+2. The checked-in `config.js` supplies the public MyPantry URL and publishable key. Optionally copy `.env.example` to `.env` to use another project. Never use a secret or service-role key.
+3. Complete the database and Auth setup in [AUTH_SETUP.md](AUTH_SETUP.md) before connecting real accounts.
+4. Run `npm start` and open `http://127.0.0.1:4173`.
+5. Run `npm test` for the session and app regression tests.
+
+For an isolated classroom prototype, set `DEMO_MODE=true` in `.env`. This mode uses the displayed demo credentials, persists its demo session across reloads, and never connects to Supabase. Demo signup and email sending are unavailable. Use Restart prototype to clear demo state.
+
+Use an HTTP server locally, rather than opening `index.html` as a file. `npm run build` generates `dist/config.js` and copies the website files into `dist/`.
+
+## 5. Authentication
+
+Connected mode uses Supabase Auth for sign-in, signup, email confirmation, password recovery, session restoration, and logout. Sessions persist on the same browser until sign-out or server-side expiry/revocation. Browser storage restrictions may prevent persistence. Demo bypasses are disabled in connected mode.
+
+Saved recipe preferences are stored locally under a key specific to each authenticated user. They are not yet synced across devices. Existing demo preferences are kept separate from real accounts.
+
+## 6. Deploy
+
+The current site uses GitHub Pages from `main` at https://jarod049.github.io/MyPantry/. It serves the root HTML, scripts, and public `config.js` directly; no build configuration change is required. Merging to `main` triggers the existing Pages deployment. For optional Netlify hosting, `netlify.toml` builds and publishes `dist`; environment variables can override the checked-in public configuration. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
+
+## 7. Verify
+
+- Sign up with a real email and complete confirmation if required.
+- Sign in, reload, and reopen the same site: the account remains signed in.
+- Sign out and reload: the login form remains visible.
+- Sign in as a second account: neither the first account's pantry nor its local saved recipes appear.
+- Test the password-reset email and save a new password.
+- Test again with browser storage unavailable and with a network failure; errors should be visible.
+
+The original pantry database integration supports loading and editing existing rows. Other prototype actions (including adding/deleting food) are not converted into complete database CRUD by this authentication change. See AUTH_SETUP.md for the existing-data ownership step and remaining limitations.
