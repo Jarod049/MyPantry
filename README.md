@@ -35,7 +35,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 Requires Node.js 22 or later.
 
 1. Run `npm ci`.
-2. The checked-in `config.js` supplies the public MyPantry URL and publishable key. Optionally copy `.env.example` to `.env` to use another project. Never use a secret or service-role key.
+2. Copy `.env.example` to `.env` and supply the MyPantry project URL and publishable key. Never use a secret or service-role key.
 3. Complete the database and Auth setup in [AUTH_SETUP.md](AUTH_SETUP.md) before connecting real accounts.
 4. Run `npm start` and open `http://127.0.0.1:4173`.
 5. Run `npm test` for the session and app regression tests.
@@ -52,7 +52,7 @@ Saved recipe preferences are stored locally under a key specific to each authent
 
 ## 6. Deploy
 
-The current site uses GitHub Pages from `main` at https://jarod049.github.io/MyPantry/. It serves the root HTML, scripts, and public `config.js` directly; no build configuration change is required. Merging to `main` triggers the existing Pages deployment. For optional Netlify hosting, `netlify.toml` builds and publishes `dist`; environment variables can override the checked-in public configuration. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
+The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; keep that existing setup. It uploads the HTML, CSS, app.js, auth.js, and generated config.js. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values; `netlify.toml` builds and publishes `dist`. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
 
 ## 7. Verify
 
