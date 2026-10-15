@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, config = {}, load } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -16,6 +16,7 @@ function boot({ id = null, storage = {}, config = {}, load } = {}) {
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
   Object.entries(storage).forEach(([key, value]) => w.localStorage.setItem(key, JSON.stringify(value)));
+  Object.entries(navigation).forEach(([key, value]) => w.sessionStorage.setItem(key, JSON.stringify(value)));
   w.MYPANTRY_CONFIG = { supabaseUrl: 'https://example.supabase.co', supabaseKey: 'test', ...config };
   w.supabase = { createClient: () => ({
     auth: {
@@ -55,6 +56,27 @@ test('token refresh preserves the current screen', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="settings"]'); f.emit('TOKEN_REFRESHED', 'alice'); await tick();
   assert.match(f.text(), /Settings/); assert.equal(f.queries.length, 1);
+});
+test('reload restores the selected tab and settings subpage', async t => {
+  const first = boot({ id: 'alice' }); t.after(() => first.dom.window.close()); await tick();
+  first.click('[data-act="tab"][data-arg="settings"]'); first.click('[data-act="deals"]');
+  const key = 'mp_state_v2:alice:navigation';
+  const nav = JSON.parse(first.w.sessionStorage.getItem(key));
+  const reloaded = boot({ id: 'alice', navigation: { [key]: nav } });
+  t.after(() => reloaded.dom.window.close()); await tick();
+  assert.equal(reloaded.w.document.querySelector('#app').dataset.key, 'appsettingsdeals');
+});
+test('navigation restores independently from preferences and stays account-specific', async t => {
+  const navigation = { 'mp_state_v2:alice:navigation': { tab: 'ing', ingView: 'soon', ingCat: 'Dairy' } };
+  const alice = boot({ id: 'alice', navigation }); t.after(() => alice.dom.window.close()); await tick();
+  assert.equal(alice.w.document.querySelector('#app').dataset.key, 'apping');
+  const bob = boot({ id: 'bob', navigation }); t.after(() => bob.dom.window.close()); await tick();
+  assert.equal(bob.w.document.querySelector('#app').dataset.key, 'apphome');
+});
+test('invalid navigation falls back to Home', async t => {
+  const f = boot({ id: 'alice', navigation: { 'mp_state_v2:alice:navigation': { tab: 'unknown', setPage: 'unknown' } } });
+  t.after(() => f.dom.window.close()); await tick();
+  assert.equal(f.w.document.querySelector('#app').dataset.key, 'apphome');
 });
 test('account switch isolates saved recipes and ignores legacy demo state', async t => {
   const f = boot({ id: 'alice', storage: { mp_state_v1: { saved: ['demo'] },

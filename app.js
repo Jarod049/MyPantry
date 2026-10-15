@@ -278,12 +278,30 @@ const DEMO_SESSION_KEY = 'mp_demo_session_v1';
 const stateKey = () => DEMO ? STORE_KEY : S.user?.id ? `mp_state_v2:${S.user.id}` : null;
 function persist() {
   const key = stateKey(); if (!key) return;
+  if (S.auth === 'app') {
+    try {
+      sessionStorage.setItem(`${key}:navigation`, JSON.stringify({ tab: S.tab, ingView: S.ingView,
+        ingCat: S.ingCat, reelView: S.reelView, setPage: S.setPage }));
+    } catch (_) {}
+  }
   try {
     localStorage.setItem(key, JSON.stringify({ inv: sb ? undefined : S.inv, saved: [...S.saved], liked: [...S.liked], prefs: S.prefs, metric: S.metric, store: S.store, zip: S.zip, uid }));
   } catch (_) {}
 }
 function hydrate() {
   const key = stateKey(); if (!key) return;
+  // Keep navigation per browser tab and account. Never restore unfinished scans
+  // or modal dialogs, and ignore invalid/old stored routes.
+  try {
+    const nav = JSON.parse(sessionStorage.getItem(`${key}:navigation`) || 'null');
+    if (nav) {
+      if (['home', 'ing', 'scan', 'reels', 'settings'].includes(nav.tab)) S.tab = nav.tab;
+      if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
+      if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
+      if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
+      if (nav.setPage === 'deals') S.setPage = 'deals';
+    }
+  } catch (_) {}
   try {
     const d = JSON.parse(localStorage.getItem(key) || 'null'); if (!d) return;
     if (Array.isArray(d.inv) && !sb) S.inv = d.inv;
@@ -1374,7 +1392,7 @@ function enterApp() {
   if (DEMO) {
     try { localStorage.setItem(DEMO_SESSION_KEY, 'active'); } catch (_) {}
   }
-  S.auth = 'app'; S.tab = 'home'; S.chat = []; render(); loadPantry();
+  S.auth = 'app'; S.chat = []; render(); loadPantry();
 }
 
 /* ---------- Event wiring ---------- */
