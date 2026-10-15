@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, insertError, insertWait } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -30,8 +30,21 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load } = 
       async signOut() { saved = null; listener('SIGNED_OUT', null); return {}; },
       async signUp() { return { data: { session: null } }; }
     },
-    from(table) { return { select() { return this; }, eq(column, value) { queries.push({ table, column, value }); return this; },
-      order() { return load ? load() : Promise.resolve({ data: [], error: null }); } }; }
+    from(table) { let inserted, owner; return {
+      insert(rows) { inserted = rows; queries.push({ table, insert: rows }); return this; },
+      select() {
+        if (!inserted) return this;
+        return (async () => {
+          if (insertWait) await insertWait;
+          if (insertError) return { data: null, error: new Error(insertError) };
+          const rows = inserted.map((r, i) => ({ ...r, ingredient_id: (database?.length || 0) + i + 1 }));
+          database?.push(...rows);
+          return { data: rows, error: null };
+        })();
+      },
+      eq(column, value) { owner = value; queries.push({ table, column, value }); return this; },
+      order() { return load ? load() : Promise.resolve({ data: (database || []).filter(r => r.auth_user_id === owner), error: null }); }
+    }; }
   }) };
   w.eval(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
@@ -42,6 +55,72 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load } = 
       w.document.querySelector(selector).dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true })); }
   };
 }
+function enterIngredient(f, name = 'Persistence test apples') {
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="manual"]');
+  for (const [id, value] of Object.entries({ f_name: name, f_qty: '3', f_unit: 'ct', f_cat: 'Produce', f_exp: '2030-01-01' })) {
+    f.w.document.getElementById(id).value = value;
+  }
+  f.click('#f_store [data-store="Pantry"]');
+  f.click('#saveItemBtn');
+}
+test('manual ingredient is confirmed in database, then reload restores it and its storage', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  enterIngredient(f); await tick();
+  assert.equal(database.length, 1);
+  assert.equal(database[0].auth_user_id, 'alice');
+  assert.equal(database[0].storage_location, 'Pantry');
+  assert.equal(database[0].quantity, 3);
+  assert.equal(database[0].expiration_source, 'label');
+  const reloaded = boot({ id: 'alice', database }); t.after(() => reloaded.dom.window.close()); await tick();
+  reloaded.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(reloaded.text(), /Persistence test apples/);
+  assert.match(reloaded.text(), /Pantry/);
+  assert.match(reloaded.text(), /Saved in database/);
+  const bob = boot({ id: 'bob', database }); t.after(() => bob.dom.window.close()); await tick();
+  bob.click('[data-act="tab"][data-arg="ing"]');
+  assert.doesNotMatch(bob.text(), /Persistence test apples/);
+});
+test('failed insert keeps ingredient form open and does not claim success', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database, insertError: 'Insert denied' }); t.after(() => f.dom.window.close()); await tick();
+  enterIngredient(f); await tick();
+  assert.equal(database.length, 0);
+  assert.match(f.w.document.querySelector('#dbErr').textContent, /Insert denied/);
+  assert.equal(f.w.document.querySelector('#saveItemBtn').disabled, false);
+  assert.doesNotMatch(f.text(), /You're all set/);
+});
+test('double click while saving sends only one insert', async t => {
+  let finish; const wait = new Promise(r => { finish = r; });
+  const database = [];
+  const f = boot({ id: 'alice', database, insertWait: wait }); t.after(() => f.dom.window.close()); await tick();
+  enterIngredient(f); f.click('#saveItemBtn');
+  assert.equal(f.queries.filter(q => q.insert).length, 1);
+  assert.equal(f.w.document.querySelector('#saveItemBtn').disabled, true);
+  finish(); await tick(); assert.equal(database.length, 1);
+});
+test('insert completing after logout cannot expose data in the signed-out screen', async t => {
+  let finish; const wait = new Promise(r => { finish = r; });
+  const f = boot({ id: 'alice', database: [], insertWait: wait }); t.after(() => f.dom.window.close()); await tick();
+  enterIngredient(f); f.emit('SIGNED_OUT', null); await tick(); finish(); await tick();
+  assert.match(f.text(), /Sign in/); assert.doesNotMatch(f.text(), /Persistence test apples/);
+});
+test('reviewed scan inserts the selected batch and restores it on reload', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="receipt"]');
+  f.click('[data-act="shutter"]');
+  await new Promise(r => setTimeout(r, 1450));
+  f.click('[data-act="confirmScan"]'); await tick();
+  assert.ok(database.length > 1);
+  assert.ok(database.every(r => r.way_added === 'receipt' && r.auth_user_id === 'alice'));
+  assert.equal(f.queries.filter(q => q.insert).length, 1);
+  const reloaded = boot({ id: 'alice', database }); t.after(() => reloaded.dom.window.close()); await tick();
+  reloaded.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(reloaded.text(), /Chicken thighs/);
+});
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
   assert.match(f.text(), /Pantry Pal/);
@@ -115,3 +194,4 @@ test('recovery event opens the real password form and keeps it through refresh',
   f.emit('PASSWORD_RECOVERY', 'alice'); await tick(); assert.match(f.text(), /Choose a new password/);
   f.emit('TOKEN_REFRESHED', 'alice'); await tick(); assert.match(f.text(), /Choose a new password/);
 });
+

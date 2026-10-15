@@ -250,8 +250,8 @@ function rowToItem(r) {
     name: r.ingredient_name, emoji: guessEmoji(r.ingredient_name),
     cat: CATS.includes(r.food_type) ? r.food_type : 'Other',
     qty: Number(r.quantity), unit: r.measurement, exp: r.expiration_date,
-    store: r.food_type === 'Frozen' ? 'Freezer' : 'Fridge',
-    src: (r.way_added === 'barcode' || r.way_added === 'manual') ? 'label' : 'ai'
+    store: r.storage_location || (r.food_type === 'Frozen' ? 'Freezer' : 'Fridge'),
+    src: r.expiration_source || ((r.way_added === 'barcode' || r.way_added === 'manual') ? 'label' : 'ai')
   };
 }
 function statusFor(exp) {
@@ -391,6 +391,55 @@ function addItems(items) {
     if (same) same.qty = Math.round((same.qty + n.qty) * 100) / 100;
     else S.inv.push({ id: 'i' + (uid++), name: n.name, emoji: n.emoji, cat: n.cat, qty: n.qty, unit: n.unit, exp: n.exp, store: n.store, src: n.src });
   });
+}
+
+let addingFood = false;
+async function saveNewItems(items, mode = 'manual') {
+  if (addingFood || !items.length) return false;
+  if (!sb) { addItems(items); return true; }
+  if (!S.user?.id) return false;
+  const owner = S.user.id, generation = accountGeneration;
+  const scan = S.scan;
+  addingFood = true;
+  // Invalidate any older load that could overwrite the confirmed insert.
+  ++pantryRequest;
+  sync = 'saving';
+  const buttons = $$('#saveItemBtn, [data-act="confirmScan"]');
+  buttons.forEach(b => { b.disabled = true; });
+  $('#dbErr')?.remove();
+  try {
+    const rows = items.map(i => ({
+      auth_user_id: owner, ingredient_name: i.name, quantity: i.qty,
+      measurement: i.unit, food_type: i.cat, expiration_date: i.exp,
+      storage_location: i.store, expiration_source: i.src,
+      way_added: ({ pantry: 'pantry_photo', receipt: 'receipt', barcode: 'barcode' })[mode] || 'manual',
+      status: statusFor(i.exp)
+    }));
+    const { data, error } = await sb.from('pantry_item').insert(rows).select();
+    if (generation !== accountGeneration) return false;
+    if (error) throw error;
+    if (!data || data.length !== items.length) throw new Error('The database did not confirm every ingredient. Reload before retrying.');
+    S.inv.push(...data.map(rowToItem));
+    sync = 'synced';
+    // A request can finish after the user navigates away. Keep the saved rows,
+    // but do not replace their newer screen with the old scan completion.
+    if (S.scan !== scan) { render(); return false; }
+    return true;
+  } catch (error) {
+    if (generation !== accountGeneration) return false;
+    sync = 'error';
+    const form = $('#itemForm');
+    if (form) {
+      const el = document.createElement('div'); el.className = 'err'; el.id = 'dbErr';
+      el.textContent = `Couldn't save your ingredients. ${error.message}`;
+      form.appendChild(el);
+    }
+    toast(`Couldn't save your ingredients. ${esc(error.message)}`, null, 'alert');
+    return false;
+  } finally {
+    addingFood = false;
+    buttons.forEach(b => { b.disabled = false; });
+  }
 }
 function dupOf(name) {
   const key = name.toLowerCase().replace(/\(.*?\)/g, '').trim().split(' ').slice(-1)[0].replace(/s$/, '');
@@ -752,7 +801,7 @@ function renderIng() {
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
 function syncChip() {
-  const m = { loading: ['Loading…', 'soon'], synced: ['Saved in database', 'fresh'], error: ['Not connected', 'now'], offline: ['Offline demo', 'soon'] }[sync];
+  const m = { loading: ['Loading…', 'soon'], saving: ['Saving…', 'soon'], synced: ['Saved in database', 'fresh'], error: ['Save/load failed', 'now'], offline: ['Offline demo', 'soon'] }[sync];
   return `<span class="pill ${m[1]}" id="syncChip" title="${sb ? 'Pantry is stored in Supabase' : 'No Supabase config found; changes stay in this browser'}">${m[0]}</span>`;
 }
 function itemRow(i) {
@@ -1202,7 +1251,7 @@ const ACT = {
   ingView(arg) { S.ingView = arg; render(); },
   ingCat(arg) { S.ingCat = arg; render(); },
   edit(id) { const it = S.inv.find(i => i.id === id); if (it) openItemForm(it, 'edit'); },
-  saveItem() {
+  async saveItem() {
     const f = $('#itemForm'); if (!f) return;
     const data = readItemForm(); if (!data) return;
     const mode = f.dataset.mode, id = f.dataset.id;
@@ -1222,7 +1271,8 @@ const ACT = {
     } else if (mode === 'reviewNew') {
       S.scan.items.push({ tid: 't' + (uid++), ...data, on: true }); closeSheet(); render();
     } else {
-      addItems([data]); closeSheet();
+      if (!await saveNewItems([data])) return;
+      closeSheet();
       S.scan = { mode: 'manual', stage: 'done', added: [data] }; S.tab = 'scan'; render();
     }
   },
@@ -1261,9 +1311,11 @@ const ACT = {
     else if (s === 'Freezer') { it.exp = estimate(it.cat, s); it.src = 'ai'; }
     render();
   },
-  confirmScan() {
+  async confirmScan() {
     const items = S.scan.items.filter(i => i.on);
-    addItems(items); S.scan = { mode: S.scan.mode, stage: 'done', added: items }; render();
+    const mode = S.scan.mode;
+    if (!await saveNewItems(items, mode)) return;
+    S.scan = { mode, stage: 'done', added: items }; render();
   },
   doneView() { S.scan = null; S.tab = 'ing'; S.ingView = 'all'; render(); },
   doneMore() { S.scan = null; render(); },
@@ -1365,7 +1417,7 @@ async function saveItemToDb(id, data) {
   let row, error;
   try {
   ({ data: row, error } = await sb.from('pantry_item')
-    .update({ ingredient_name: data.name, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp) })
+    .update({ ingredient_name: data.name, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp), storage_location: data.store, expiration_source: data.src })
     .eq('ingredient_id', it.dbId)
     .eq(OWNER_COLUMN, owner)
     .select()
@@ -1561,3 +1613,4 @@ if (DEMO) {
   if (auth) auth.start();
 }
 })();
+
