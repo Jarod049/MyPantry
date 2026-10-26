@@ -6,14 +6,14 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, insertError, insertWait } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
   const w = dom.window;
   let listener, saved = id ? { user: user(id), access_token: 'test-session' } : null;
   const queries = [];
-  const mockTables = {};
+  const mockTables = Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
   Object.entries(storage).forEach(([key, value]) => w.localStorage.setItem(key, JSON.stringify(value)));
@@ -37,6 +37,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       const builder = {
         insert(rows) { action = 'insert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, insert: rowsToWrite }); return this; },
         upsert(rows) { action = 'upsert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, upsert: rowsToWrite }); return this; },
+        update(rows) { action = 'update'; rowsToWrite = rows; queries.push({ table, update: rows }); return this; },
         select() { return this; },
         eq(column, value) { filters[column] = value; queries.push({ table, column, value }); return this; },
         order() { return this; },
@@ -48,7 +49,10 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
             if (action === 'insert' && table === 'pantry_item' && insertWait) await insertWait;
             if (action === 'insert' && table === 'pantry_item' && insertError) return { data: null, error: new Error(insertError) };
             const target = table === 'pantry_item' ? (database || []) : (mockTables[table] ||= []);
-            const written = rowsToWrite.map((row, i) => ({ ...row, ...(table === 'pantry_item' ? { ingredient_id: (database?.length || 0) + i + 1 } : {}) }));
+            const written = rowsToWrite.map((row, i) => ({ ...row,
+              ...(table === 'pantry_item' ? { ingredient_id: (database?.length || 0) + i + 1 } : {}),
+              ...(table === 'app_sessions' ? { started_at: new Date().toISOString(), last_active_at: new Date().toISOString(), ended_at: null, end_reason: null } : {})
+            }));
             if (action === 'upsert') {
               for (const row of written) {
                 const key = table === 'chat_conversations' ? 'conversation_id' : 'user_id';
@@ -57,6 +61,12 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
               }
             } else target.push(...written);
             return { data: written, error: null };
+          }
+          if (action === 'update') {
+            const target = table === 'pantry_item' ? (database || []) : (mockTables[table] || []);
+            const updated = target.filter(row => Object.entries(filters).every(([key, value]) => row[key] === value));
+            updated.forEach(row => Object.assign(row, rowsToWrite));
+            return { data: updated, error: null };
           }
           let result = table === 'pantry_item'
             ? (load ? await load() : { data: (database || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null })
@@ -71,7 +81,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   }) };
   w.eval(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
-  return { dom, w, queries, emit(event, id) { listener(event, id ? { user: user(id) } : null); },
+  return { dom, w, queries, mockTables, emit(event, id) { listener(event, id ? { user: user(id) } : null); },
     click(selector) { const el = w.document.querySelector(selector); assert.ok(el, selector); el.click(); },
     text: () => w.document.querySelector('#app').textContent,
     form(selector, values) { for (const [id, value] of Object.entries(values)) w.document.getElementById(id).value = value;
@@ -119,7 +129,7 @@ test('double click while saving sends only one insert', async t => {
   const database = [];
   const f = boot({ id: 'alice', database, insertWait: wait }); t.after(() => f.dom.window.close()); await tick();
   enterIngredient(f); f.click('#saveItemBtn');
-  assert.equal(f.queries.filter(q => q.insert).length, 1);
+  assert.equal(f.queries.filter(q => q.table === 'pantry_item' && q.insert).length, 1);
   assert.equal(f.w.document.querySelector('#saveItemBtn').disabled, true);
   finish(); await tick(); assert.equal(database.length, 1);
 });
@@ -139,7 +149,7 @@ test('reviewed scan inserts the selected batch and restores it on reload', async
   f.click('[data-act="confirmScan"]'); await tick();
   assert.ok(database.length > 1);
   assert.ok(database.every(r => r.way_added === 'receipt' && r.auth_user_id === 'alice'));
-  assert.equal(f.queries.filter(q => q.insert).length, 1);
+  assert.equal(f.queries.filter(q => q.table === 'pantry_item' && q.insert).length, 1);
   const reloaded = boot({ id: 'alice', database }); t.after(() => reloaded.dom.window.close()); await tick();
   reloaded.click('[data-act="tab"][data-arg="ing"]');
   assert.match(reloaded.text(), /Chicken thighs/);
@@ -153,6 +163,28 @@ test('actual app restores Alice, scopes pantry query, and signs out across reloa
   f.click('[data-act="logout"]'); await tick(); assert.match(f.text(), /Sign in/);
   assert.doesNotMatch(f.text(), /alice@example.test/);
   const next = boot(); t.after(() => next.dom.window.close()); await tick(); assert.match(next.text(), /Sign in/);
+});
+test('app session starts on sign-in and records explicit sign-out', async t => {
+  const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick(); await tick();
+  const sessions = f.mockTables.app_sessions;
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].user_id, 'alice');
+  assert.equal(sessions[0].ended_at, null);
+  f.click('[data-act="tab"][data-arg="settings"]');
+  f.click('[data-act="logout"]'); await tick(); await tick();
+  assert.equal(sessions[0].end_reason, 'signed_out');
+  assert.ok(sessions[0].ended_at);
+});
+test('stale app session is closed after 15 minutes and a new one starts', async t => {
+  const lastActive = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const f = boot({ id: 'alice', tables: { app_sessions: [{ session_id: 'old-session', user_id: 'alice',
+    started_at: lastActive, last_active_at: lastActive, ended_at: null, end_reason: null }] } });
+  t.after(() => f.dom.window.close()); await tick(); await tick();
+  const sessions = f.mockTables.app_sessions;
+  assert.equal(sessions.length, 2);
+  assert.equal(sessions[0].end_reason, 'inactive_timeout');
+  assert.equal(Date.parse(sessions[0].ended_at), Date.parse(lastActive) + 15 * 60 * 1000);
+  assert.equal(sessions[1].ended_at, null);
 });
 test('token refresh preserves the current screen', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
