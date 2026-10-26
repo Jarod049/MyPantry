@@ -242,6 +242,14 @@ let appStateWriteQueue = Promise.resolve();
 let chatLoadRequest = 0;
 let chatRevision = 0;
 let chatWriteQueue = Promise.resolve();
+const APP_SESSION_KEY = owner => `mp_app_session_v1:${owner}`;
+const APP_SESSION_IDLE_MS = 15 * 60 * 1000;
+const APP_SESSION_HEARTBEAT_MS = 60 * 1000;
+let appSessionId = null;
+let appSessionOwner = null;
+let appSessionGeneration = 0;
+let appSessionTimer = null;
+let appSessionStarting = false;
 const redirectTo = window.location.origin + window.location.pathname;
 const auth = sb ? window.MyPantryAuth.createAuth(sb, applySession, error => {
   S.auth = 'login'; S.user = null; S.authError = error.message; render();
@@ -446,9 +454,140 @@ async function loadChatHistory() {
   }
 }
 
+function stopAppSessionTracking(clearStored = true) {
+  clearInterval(appSessionTimer);
+  appSessionTimer = null;
+  if (clearStored && appSessionOwner) {
+    try { sessionStorage.removeItem(APP_SESSION_KEY(appSessionOwner)); } catch (_) {}
+  }
+  appSessionId = null;
+  appSessionOwner = null;
+  appSessionGeneration = 0;
+  appSessionStarting = false;
+}
+function appSessionIsCurrent(owner, generation) {
+  return !!sb && S.auth === 'app' && S.user?.id === owner &&
+    accountGeneration === generation && appSessionOwner === owner &&
+    appSessionGeneration === generation && !!appSessionId;
+}
+async function updateAppSession(values, owner = appSessionOwner, id = appSessionId) {
+  if (!sb || !owner || !id) return false;
+  const { error } = await sb.from('app_sessions').update(values)
+    .eq('session_id', id).eq('user_id', owner);
+  if (error) throw error;
+  return true;
+}
+async function appSessionHeartbeat(owner, generation) {
+  if (!appSessionIsCurrent(owner, generation) || document.visibilityState === 'hidden') return;
+  try {
+    await updateAppSession({ last_active_at: new Date().toISOString() }, owner, appSessionId);
+  } catch (error) { console.warn('[MyPantry] session activity update failed', error); }
+}
+async function resumeAppSessionAfterVisibility() {
+  const owner = appSessionOwner, id = appSessionId, generation = appSessionGeneration;
+  if (!appSessionIsCurrent(owner, generation)) return startAppSessionTracking();
+  try {
+    const { data, error } = await sb.from('app_sessions').select('last_active_at,ended_at')
+      .eq('session_id', id).eq('user_id', owner).maybeSingle();
+    if (error) throw error;
+    if (!appSessionIsCurrent(owner, generation)) return;
+    const activeAt = Date.parse(data?.last_active_at || '');
+    if (!data || data.ended_at || !Number.isFinite(activeAt) || Date.now() - activeAt > APP_SESSION_IDLE_MS) {
+      if (data && !data.ended_at && Number.isFinite(activeAt)) {
+        const { error: endError } = await sb.from('app_sessions').update({
+          ended_at: new Date(activeAt + APP_SESSION_IDLE_MS).toISOString(), end_reason: 'inactive_timeout'
+        }).eq('session_id', id).eq('user_id', owner);
+        if (endError) throw endError;
+      }
+      if (!appSessionIsCurrent(owner, generation)) return;
+      stopAppSessionTracking();
+      return startAppSessionTracking();
+    }
+    await appSessionHeartbeat(owner, generation);
+  } catch (error) { console.warn('[MyPantry] session resume check failed', error); }
+}
+async function startAppSessionTracking() {
+  if (!sb || !S.user?.id || S.auth !== 'app' || appSessionStarting) return;
+  const owner = S.user.id, generation = accountGeneration;
+  if (appSessionOwner === owner && appSessionGeneration === generation && appSessionId) return;
+  appSessionStarting = true;
+  const storedKey = APP_SESSION_KEY(owner);
+  try {
+    let storedId = null;
+    try { storedId = sessionStorage.getItem(storedKey); } catch (_) {}
+    let row = null;
+    if (storedId) {
+      const result = await sb.from('app_sessions').select('session_id,last_active_at,ended_at')
+        .eq('session_id', storedId).eq('user_id', owner).maybeSingle();
+      if (result.error) throw result.error;
+      row = result.data;
+    } else {
+      // Recover a recent session if the browser lost its per-tab storage.
+      const result = await sb.from('app_sessions').select('session_id,last_active_at,ended_at')
+        .eq('user_id', owner).order('started_at', { ascending: false }).limit(1).maybeSingle();
+      if (result.error) throw result.error;
+      row = result.data;
+    }
+    if (generation !== accountGeneration || S.user?.id !== owner || S.auth !== 'app') return;
+    const now = Date.now();
+    if (row && !row.ended_at && Number.isFinite(Date.parse(row.last_active_at)) &&
+        now - Date.parse(row.last_active_at) <= APP_SESSION_IDLE_MS) {
+      appSessionId = row.session_id;
+      appSessionOwner = owner;
+      appSessionGeneration = generation;
+      try { sessionStorage.setItem(storedKey, appSessionId); } catch (_) {}
+      await appSessionHeartbeat(owner, generation);
+    } else {
+      if (row && !row.ended_at && Number.isFinite(Date.parse(row.last_active_at))) {
+        const inactiveAt = new Date(Date.parse(row.last_active_at) + APP_SESSION_IDLE_MS).toISOString();
+        const { error } = await sb.from('app_sessions').update({
+          ended_at: inactiveAt, end_reason: 'inactive_timeout'
+        }).eq('session_id', row.session_id).eq('user_id', owner);
+        if (error) throw error;
+      }
+      if (generation !== accountGeneration || S.user?.id !== owner || S.auth !== 'app') return;
+      appSessionId = crypto.randomUUID();
+      appSessionOwner = owner;
+      appSessionGeneration = generation;
+      try { sessionStorage.setItem(storedKey, appSessionId); } catch (_) {}
+      const { error } = await sb.from('app_sessions').insert({ session_id: appSessionId, user_id: owner });
+      if (error) throw error;
+    }
+    if (!appSessionIsCurrent(owner, generation)) return;
+    clearInterval(appSessionTimer);
+    appSessionTimer = setInterval(() => appSessionHeartbeat(owner, generation), APP_SESSION_HEARTBEAT_MS);
+  } catch (error) {
+    console.warn('[MyPantry] session tracking could not start', error);
+    if (appSessionOwner === owner && appSessionGeneration === generation) stopAppSessionTracking();
+  } finally {
+    appSessionStarting = false;
+  }
+}
+async function endAppSession(reason = 'signed_out') {
+  const owner = appSessionOwner, id = appSessionId;
+  if (!owner || !id) return false;
+  clearInterval(appSessionTimer);
+  appSessionTimer = null;
+  try {
+    const endedAt = new Date().toISOString();
+    await updateAppSession({ last_active_at: endedAt, ended_at: endedAt, end_reason: reason }, owner, id);
+    try { sessionStorage.removeItem(APP_SESSION_KEY(owner)); } catch (_) {}
+    return true;
+  } catch (error) {
+    console.warn('[MyPantry] session end could not be saved', error);
+    return false;
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.auth === 'app') {
+    resumeAppSessionAfterVisibility();
+  }
+});
+
 function applySession(session, event) {
   const user = session?.user;
   if (!user) {
+    stopAppSessionTracking();
     resetAIChat();
     ++accountGeneration;
     ++chatLoadRequest; ++chatRevision;
@@ -458,6 +597,7 @@ function applySession(session, event) {
   }
   const changed = S.user?.id !== user.id;
   if (changed) {
+    stopAppSessionTracking();
     resetAIChat();
     ++accountGeneration;
     ++chatLoadRequest; ++chatRevision;
@@ -1659,13 +1799,28 @@ const ACT = {
   },
   async logout(_, button) {
     if (button) button.disabled = true;
+    let endedSession = false;
+    const previousSession = { owner: appSessionOwner, id: appSessionId, generation: appSessionGeneration };
     try {
+      if (auth) endedSession = await endAppSession('signed_out');
       if (auth) await auth.signOut();
       else {
         try { localStorage.removeItem(DEMO_SESSION_KEY); } catch (_) {}
         resetAIChat(); ++accountGeneration; S = freshState(); hydrate(); closeSheet(); render();
       }
-    } catch (error) { toast(`Could not sign out: ${esc(error.message)}`, null, 'alert'); }
+    } catch (error) {
+      if (endedSession && previousSession.owner && previousSession.id && previousSession.generation === accountGeneration) {
+        try {
+          await updateAppSession({ last_active_at: new Date().toISOString(), ended_at: null, end_reason: null }, previousSession.owner, previousSession.id);
+          appSessionId = previousSession.id; appSessionOwner = previousSession.owner; appSessionGeneration = previousSession.generation;
+          try { sessionStorage.setItem(APP_SESSION_KEY(previousSession.owner), previousSession.id); } catch (_) {}
+          appSessionTimer = setInterval(() => appSessionHeartbeat(previousSession.owner, previousSession.generation), APP_SESSION_HEARTBEAT_MS);
+        } catch (restoreError) { console.warn('[MyPantry] failed sign-out session restore failed', restoreError); }
+      } else if (appSessionId) {
+        appSessionTimer = setInterval(() => appSessionHeartbeat(appSessionOwner, appSessionGeneration), APP_SESSION_HEARTBEAT_MS);
+      }
+      toast(`Could not sign out: ${esc(error.message)}`, null, 'alert');
+    }
     finally { if (button) button.disabled = false; }
   }
 };
@@ -1710,6 +1865,7 @@ function enterApp() {
     try { localStorage.setItem(DEMO_SESSION_KEY, 'active'); } catch (_) {}
   }
   S.auth = 'app'; S.chat = []; render();
+  startAppSessionTracking();
   loadPantry(); loadUserAppState(); loadChatHistory();
 }
 
