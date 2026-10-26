@@ -208,8 +208,8 @@ function freshState() {
     accounts: { 'karen@mypantry.app': { pw: 'Pantry#Demo2026', name: 'Karen Miller' } },
     user: null, signupEmail: '',
     remembered: false, faceId: true, stayIn: false, metric: false, reminders: true,
-    store: "Smith's", zip: '84604',
-    prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(),
+    store: "Smith's", zip: '',
+    prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null,
     ingView: 'all', ingCat: 'All', ingQuery: '',
     scan: null, setPage: null, reelView: 'feed'
@@ -237,6 +237,11 @@ if (!DEMO) {
 const OWNER_COLUMN = 'auth_user_id';
 let accountGeneration = 0;
 let pantryRequest = 0;
+let appStateTimer = null;
+let appStateWriteQueue = Promise.resolve();
+let chatLoadRequest = 0;
+let chatRevision = 0;
+let chatWriteQueue = Promise.resolve();
 const redirectTo = window.location.origin + window.location.pathname;
 const auth = sb ? window.MyPantryAuth.createAuth(sb, applySession, error => {
   S.auth = 'login'; S.user = null; S.authError = error.message; render();
@@ -250,6 +255,7 @@ function rowToItem(r) {
     name: r.ingredient_name, emoji: guessEmoji(r.ingredient_name),
     cat: CATS.includes(r.food_type) ? r.food_type : 'Other',
     qty: Number(r.quantity), unit: r.measurement, exp: r.expiration_date,
+    legacyUserId: r.user_id ?? null, wayAdded: r.way_added || 'manual',
     store: r.storage_location || (r.food_type === 'Frozen' ? 'Freezer' : 'Fridge'),
     src: r.expiration_source || ((r.way_added === 'barcode' || r.way_added === 'manual') ? 'label' : 'ai')
   };
@@ -270,7 +276,6 @@ async function loadPantry() {
   if (generation !== accountGeneration || request !== pantryRequest) return;
   if (error) { sync = 'error'; console.error('[MyPantry] load failed', error); toast(`Couldn't load your pantry: ${esc(error.message)}`, null, 'alert'); render(); return; }
   S.inv = data.map(rowToItem); sync = 'synced';
-  if (S.chat.length <= 2) S.chat = [];   // rebuild the assistant's greeting with the real pantry
   render();
 }
 const STORE_KEY = 'mp_state_v1'; // Legacy demo data only; never import it into real accounts.
@@ -285,8 +290,9 @@ function persist() {
     } catch (_) {}
   }
   try {
-    localStorage.setItem(key, JSON.stringify({ inv: sb ? undefined : S.inv, saved: [...S.saved], liked: [...S.liked], prefs: S.prefs, metric: S.metric, store: S.store, zip: S.zip, uid }));
+    localStorage.setItem(key, JSON.stringify({ inv: sb ? undefined : S.inv, saved: [...S.saved], liked: [...S.liked], watched: [...S.watched], prefs: S.prefs, metric: S.metric, reminders: S.reminders, store: S.store, zip: S.zip, uid }));
   } catch (_) {}
+  if (sb && S.user?.id) queueUserAppStateWrite();
 }
 function hydrate() {
   const key = stateKey(); if (!key) return;
@@ -305,23 +311,156 @@ function hydrate() {
   try {
     const d = JSON.parse(localStorage.getItem(key) || 'null'); if (!d) return;
     if (Array.isArray(d.inv) && !sb) S.inv = d.inv;
-    S.saved = new Set(d.saved || []); S.liked = new Set(d.liked || []); S.prefs = d.prefs || {};
-    S.metric = !!d.metric; S.store = d.store || S.store; S.zip = d.zip || S.zip; uid = Math.max(uid, d.uid || 0);
+    S.saved = new Set(d.saved || []); S.liked = new Set(d.liked || []); S.watched = new Set(d.watched || []); S.prefs = d.prefs || {};
+    S.metric = !!d.metric; S.reminders = d.reminders !== false; S.store = d.store || S.store; S.zip = d.zip || S.zip; uid = Math.max(uid, d.uid || 0);
   } catch (_) {}
 }
-if (DEMO) hydrate();
+if (DEMO) { S.zip = '84604'; hydrate(); }
+
+function userAppStatePayload(owner = S.user?.id) {
+  return {
+    user_id: owner,
+    saved_recipe_ids: [...S.saved],
+    liked_recipe_ids: [...S.liked],
+    watched_recipe_ids: [...S.watched],
+    recipe_preferences: S.prefs,
+    metric: S.metric,
+    spoil_reminders: S.reminders,
+    preferred_store: S.store || null,
+    zip_code: /^\d{5}$/.test(S.zip || '') ? S.zip : null
+  };
+}
+function queueUserAppStateWrite() {
+  clearTimeout(appStateTimer);
+  const generation = accountGeneration;
+  appStateTimer = setTimeout(async () => {
+    const owner = S.user?.id;
+    if (!sb || !owner || generation !== accountGeneration) return;
+    appStateWriteQueue = appStateWriteQueue.catch(() => {}).then(async () => {
+      if (generation !== accountGeneration) return;
+      const { error } = await sb.from('user_app_state').upsert(userAppStatePayload(owner), { onConflict: 'user_id' });
+      if (generation !== accountGeneration) return;
+      if (error) throw error;
+    }).catch(error => {
+      if (generation !== accountGeneration) return;
+      console.error('[MyPantry] account state save failed', error);
+      toast(`Couldn't sync your saved recipes and settings: ${esc(error.message)}`, null, 'alert');
+    });
+  }, 180);
+}
+async function loadUserAppState() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration;
+  let data, error;
+  try {
+    ({ data, error } = await sb.from('user_app_state').select('*').eq('user_id', owner).maybeSingle());
+  } catch (err) { error = err; }
+  if (generation !== accountGeneration) return;
+  if (error) {
+    console.error('[MyPantry] account state load failed', error);
+    toast(`Couldn't load your saved recipes and settings: ${esc(error.message)}`, null, 'alert');
+    return;
+  }
+  if (data) {
+    S.saved = new Set(data.saved_recipe_ids || []);
+    S.liked = new Set(data.liked_recipe_ids || []);
+    S.watched = new Set(data.watched_recipe_ids || []);
+    S.prefs = data.recipe_preferences || {};
+    S.metric = !!data.metric;
+    S.reminders = data.spoil_reminders !== false;
+    S.store = data.preferred_store || "Smith's";
+    S.zip = data.zip_code || '';
+    render();
+    return;
+  }
+  // One-time migration of this account's old browser-only settings and recipe state.
+  let hasLocalState = false;
+  try { hasLocalState = !!localStorage.getItem(stateKey()); } catch (_) {}
+  if (hasLocalState) queueUserAppStateWrite();
+}
+function ensureConversationId() {
+  if (!S.conversationId) S.conversationId = crypto.randomUUID();
+  return S.conversationId;
+}
+function historicalChatHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  template.content.querySelectorAll('[data-act]').forEach(control => {
+    const label = document.createElement('span');
+    label.textContent = control.textContent;
+    control.replaceWith(label);
+  });
+  return template.innerHTML;
+}
+function saveChatMessage(who, html) {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, conversationId = ensureConversationId();
+  chatWriteQueue = chatWriteQueue.catch(() => {}).then(async () => {
+    if (generation !== accountGeneration) return;
+    const { error: conversationError } = await sb.from('chat_conversations').upsert(
+      { conversation_id: conversationId, user_id: owner }, { onConflict: 'conversation_id' }
+    );
+    if (conversationError) throw conversationError;
+    const { error } = await sb.from('chat_messages').insert({
+      conversation_id: conversationId, user_id: owner,
+      sender: who === 'user' ? 'user' : 'assistant', content_html: html
+    });
+    if (error) throw error;
+  }).catch(error => {
+    if (generation !== accountGeneration) return;
+    console.error('[MyPantry] chat history save failed', error);
+    toast(`Couldn't save this conversation: ${esc(error.message)}`, null, 'alert');
+  });
+}
+async function loadChatHistory() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++chatLoadRequest, revision = chatRevision;
+  let conversation, error;
+  try {
+    ({ data: conversation, error } = await sb.from('chat_conversations').select('conversation_id')
+      .eq('user_id', owner).order('created_at', { ascending: false }).limit(1).maybeSingle());
+    if (error) throw error;
+    if (!conversation) {
+      if (generation === accountGeneration && request === chatLoadRequest && revision === chatRevision) {
+        S.conversationId = crypto.randomUUID(); S.chat = []; render();
+      }
+      return;
+    }
+    let messages;
+    ({ data: messages, error } = await sb.from('chat_messages').select('sender, content_html')
+      .eq('user_id', owner).eq('conversation_id', conversation.conversation_id)
+      .order('created_at', { ascending: true }));
+    if (error) throw error;
+    if (generation !== accountGeneration || request !== chatLoadRequest || revision !== chatRevision) return;
+    S.conversationId = conversation.conversation_id;
+    S.chat = (messages || []).map(m => ({ who: m.sender === 'user' ? 'user' : 'bot', html: historicalChatHtml(m.content_html) }));
+    chatHistory = (messages || []).map(m => ({
+      role: m.sender === 'user' ? 'user' : 'assistant',
+      content: chatTextFromHtml(m.content_html)
+    })).filter(m => m.content).slice(-10);
+    render();
+  } catch (err) {
+    if (generation !== accountGeneration || request !== chatLoadRequest) return;
+    console.error('[MyPantry] chat history load failed', err);
+    toast(`Couldn't load your conversation history: ${esc(err.message)}`, null, 'alert');
+  }
+}
 
 function applySession(session, event) {
   const user = session?.user;
   if (!user) {
-    resetAIChat(); ++accountGeneration;
+    resetAIChat();
+    ++accountGeneration;
+    ++chatLoadRequest; ++chatRevision;
     $$('.toast', phone).forEach(t => t.remove());
     closeSheet(); S = freshState(); S.inv = []; S.auth = 'login';
     render(); return;
   }
   const changed = S.user?.id !== user.id;
   if (changed) {
-    resetAIChat(); ++accountGeneration;
+    resetAIChat();
+    ++accountGeneration;
+    ++chatLoadRequest; ++chatRevision;
     $$('.toast', phone).forEach(t => t.remove());
     closeSheet(); S = freshState(); S.inv = [];
     S.user = { id: user.id, email: user.email || '', name: user.user_metadata?.name || user.email?.split('@')[0] || 'User' };
@@ -393,6 +532,74 @@ function addItems(items) {
   });
 }
 
+function pantryRow(item) {
+  return {
+    ingredient_name: item.name, quantity: item.qty, measurement: item.unit,
+    food_type: item.cat, expiration_date: item.exp, status: statusFor(item.exp),
+    storage_location: item.store, expiration_source: item.src
+  };
+}
+async function persistPantryDiff(before, after) {
+  if (!sb) return;
+  const owner = S.user?.id;
+  if (!owner) throw new Error('Sign in again before changing your pantry.');
+  const generation = accountGeneration;
+  const oldById = new Map(before.filter(i => i.dbId).map(i => [i.dbId, i]));
+  const nextById = new Map(after.filter(i => i.dbId).map(i => [i.dbId, i]));
+  for (const oldItem of before.filter(i => i.dbId)) {
+    if (generation !== accountGeneration) throw new Error('Your account changed. Reload your pantry.');
+    const nextItem = nextById.get(oldItem.dbId);
+    if (!nextItem) {
+      const { data, error } = await sb.from('pantry_item').delete()
+        .eq('ingredient_id', oldItem.dbId).eq(OWNER_COLUMN, owner).select('ingredient_id');
+      if (error) throw error;
+      if (!data?.length) throw new Error(`${oldItem.name} was not found in your account.`);
+      continue;
+    }
+    const oldValues = pantryRow(oldItem), nextValues = pantryRow(nextItem);
+    if (Object.keys(nextValues).every(key => oldValues[key] === nextValues[key])) continue;
+    const { data, error } = await sb.from('pantry_item').update(nextValues)
+      .eq('ingredient_id', oldItem.dbId).eq(OWNER_COLUMN, owner)
+      .select('ingredient_id').maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`${oldItem.name} was not found in your account.`);
+  }
+  for (const item of after.filter(i => i.dbId && !oldById.has(i.dbId))) {
+    if (generation !== accountGeneration) throw new Error('Your account changed. Reload your pantry.');
+    const { data, error } = await sb.from('pantry_item').insert({
+      ingredient_id: item.dbId, auth_user_id: owner, user_id: item.legacyUserId,
+      ...pantryRow(item), way_added: item.wayAdded || 'manual'
+    }).select('ingredient_id').maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`${item.name} could not be restored.`);
+  }
+}
+async function applyPantryTransition(before, after) {
+  if (!sb) { S.inv = after; return true; }
+  const oldItems = JSON.parse(JSON.stringify(before));
+  try {
+    await persistPantryDiff(oldItems, after);
+    S.inv = after;
+    sync = 'synced';
+    return true;
+  } catch (error) {
+    S.inv = oldItems;
+    sync = 'error';
+    console.error('[MyPantry] pantry change failed', error);
+    await loadPantry();
+    toast(`Couldn't update your pantry: ${esc(error.message)}`, null, 'alert');
+    return false;
+  }
+}
+async function restorePantrySnapshot(snapshotText) {
+  const before = JSON.parse(snapshot());
+  const desired = JSON.parse(snapshotText);
+  if (!await applyPantryTransition(before, desired)) return false;
+  S.undo = null;
+  render();
+  return true;
+}
+
 let addingFood = false;
 async function saveNewItems(items, mode = 'manual') {
   if (addingFood || !items.length) return false;
@@ -450,6 +657,7 @@ function learn(r) {
   S.prefs[r.main] = (S.prefs[r.main] || 0) + 1;
   S.prefs[r.type] = (S.prefs[r.type] || 0) + 1;
   const el = $('#learnChip'); if (el) el.textContent = learnText();
+  persist();
 }
 function learnText() {
   const top = Object.entries(S.prefs).sort((a, b) => b[1] - a[1]).slice(0, 2).map(e => e[0]);
@@ -636,14 +844,16 @@ const expList = items => `<ul class="expiring-list">${items.map(i => `<li><span 
 const SUGGEST = ["What's going bad?", 'I want Chinese tonight', 'What can I make for dinner?', 'Do I have cheddar?', 'Is my milk still good?', 'I made egg fried rice', 'Clear my inventory'];
 function renderHome() {
   if (!S.chat.length) initChat();
-  return `<div class="chat-head"><div class="bot-av">${ic('spark')}</div><div><h1>Pantry Pal</h1><div class="sub">AI assistant</div></div>
+  return `<div class="chat-head"><div class="bot-av">${ic('spark')}</div><div><h1>Pantry Pal</h1><div class="sub">AI assistant · history saved to your account</div></div>
       <button class="icon-btn" data-act="newChat" aria-label="Start a new chat">${ic('refresh')}</button></div>
     <div class="scroll" id="chatScroll"><div class="chat" id="chat" aria-live="polite">${S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join('')}</div></div>
     <div class="chips" aria-label="Suggestions">${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
     <form class="composer" id="chatForm"><input class="input" id="chatIn" maxlength="2000" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
 }
 function pushMsg(who, html) {
+  ++chatRevision;
   S.chat.push({ who, html });
+  saveChatMessage(who, html);
   const chat = $('#chat'); if (!chat) return;
   const d = document.createElement('div'); d.className = 'msg ' + who; d.innerHTML = html; chat.appendChild(d);
   const cs = $('#chatScroll'); cs.scrollTop = cs.scrollHeight;
@@ -653,6 +863,11 @@ let chatHistory = [];
 function resetAIChat() {
   if (chatRequest) chatRequest.abort();
   chatRequest = null; chatHistory = [];
+}
+function chatTextFromHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  return template.content.textContent.replace(/\s+/g, ' ').trim();
 }
 async function ask(text) {
   text = text.trim();
@@ -714,7 +929,7 @@ function dealFor(term) { return DEALS.find(d => term && d.name.toLowerCase().inc
 
 const CUISINES = { chinese: 'Chinese', asian: 'Chinese', 'stir fry': 'Chinese', italian: 'Italian', pasta: 'Italian', mexican: 'Mexican', taco: 'Mexican', breakfast: 'Breakfast', brunch: 'Breakfast', american: 'American', comfort: 'American', japanese: 'Japanese', sushi: 'Japanese', thai: 'Thai', indian: 'Indian', greek: 'Greek', korean: 'Korean' };
 
-function reply(text) {
+async function reply(text) {
   const t = text.toLowerCase().trim();
 
   if (/\b(clear|reset|delete|empty|wipe|remove)\b.*\b(inventory|pantry|everything|all|ingredients|food)\b/.test(t)) {
@@ -727,7 +942,11 @@ function reply(text) {
     const r = RECIPES.find(x => x.kw.some(k => t.includes(k)) || t.includes(x.name.toLowerCase()));
     if (!r) return `<p>Nice! Which recipe did you make? I'll take those ingredients out of your pantry.</p><div class="actions">${makeable().slice(0, 4).map(x => `<button class="btn btn-ghost btn-sm" data-act="madeDirect" data-arg="${x.id}">${esc(x.name)}</button>`).join('')}</div>`;
     if (!canMake(r)) return `<p>I couldn't find everything for ${esc(r.name)} in your pantry, so I left it as is. You can edit items in the Ingredients tab.</p>`;
+    const before = snapshot();
     const log = useRecipe(r);
+    if (!await applyPantryTransition(JSON.parse(before), JSON.parse(snapshot()))) {
+      return '<p>I couldn\'t update your pantry, so I left the food amounts unchanged. Please try again.</p>';
+    }
     setTimeout(refreshBadge, 0);
     return `<p>Great choice! I updated your pantry for <b>${esc(r.name)}</b>:</p><ul>${log.map(l => `<li>${logLine(l)}</li>`).join('')}</ul>
       <div class="actions"><button class="btn btn-ghost btn-sm" data-act="undoUse">${ic('undo')} Undo</button></div>`;
@@ -1238,8 +1457,12 @@ function resetModal() {
     <button class="btn btn-danger" data-act="resetDo">Reset inventory</button>
     <button class="btn btn-ghost" data-act="closeSheet">Cancel</button>`;
 }
-function doReset() {
-  S.inv = []; S.prefs = {}; S.liked.clear(); S.watched.clear(); S.chat = [];
+async function doReset() {
+  const before = JSON.parse(snapshot());
+  if (!await applyPantryTransition(before, [])) return false;
+  S.prefs = {}; S.liked.clear(); S.watched.clear(); S.chat = [];
+  persist();
+  return true;
 }
 
 /* ===========================================================
@@ -1268,14 +1491,20 @@ const ACT = {
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
   goSoon() { S.tab = 'ing'; S.ingView = 'soon'; render(); },
   askFromSoon() { S.tab = 'home'; render(); ask("What's going bad?"); },
-  newChat() { resetAIChat(); S.chat = []; render(); },
-  chatClear(_, b) { b.closest('.actions').remove(); doReset(); pushMsg('bot', '<p>Done. I cleared your inventory and reset your Reels. Tap Scan whenever you want to log food again.</p>'); refreshBadge(); },
+  newChat() { resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; render(); },
+  async chatClear() {
+    if (!await doReset()) return;
+    resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; render();
+    pushMsg('bot', '<p>Done. I cleared your inventory and reset your Reels. Tap Scan whenever you want to log food again.</p>'); refreshBadge();
+  },
   chatCancel(_, b) { b.closest('.actions').remove(); pushMsg('bot', '<p>No problem. Your food is still there.</p>'); },
   madeDirect(id, b) { b.closest('.actions').remove(); ask(`I made ${R(id).name}`); },
-  undoUse(_, b) { if (S.undo) { restore(S.undo); S.undo = null; b.closest('.actions').remove(); pushMsg('bot', '<p>Undone. Your pantry is back the way it was.</p>'); refreshBadge(); } },
-  removeItem(id, b) {
+  async undoUse(_, b) { if (S.undo && await restorePantrySnapshot(S.undo)) { b.closest('.actions')?.remove(); pushMsg('bot', '<p>Undone. Your pantry is back the way it was.</p>'); refreshBadge(); } },
+  async removeItem(id, b) {
     const it = S.inv.find(i => i.id === id); if (!it) return;
-    S.inv = S.inv.filter(i => i.id !== id); b.closest('.actions')?.remove();
+    const before = JSON.parse(snapshot()), after = before.filter(i => i.id !== id);
+    if (!await applyPantryTransition(before, after)) return;
+    b.closest('.actions')?.remove();
     pushMsg('bot', `<p>Removed ${esc(it.name)} from your pantry.</p>`); refreshBadge();
   },
 
@@ -1307,10 +1536,13 @@ const ACT = {
       S.scan = { mode: 'manual', stage: 'done', added: [data] }; S.tab = 'scan'; render();
     }
   },
-  deleteItem(id) {
-    const before = snapshot(); const it = S.inv.find(i => i.id === id);
-    S.inv = S.inv.filter(i => i.id !== id); closeSheet(); render();
-    toast(`Deleted ${esc(it.name)}`, () => { restore(before); render(); }, 'trash');
+  async deleteItem(id) {
+    const before = JSON.parse(snapshot()); const it = S.inv.find(i => i.id === id);
+    if (!it) return;
+    const after = before.filter(i => i.id !== id);
+    if (!await applyPantryTransition(before, after)) return;
+    closeSheet(); render();
+    toast(`Deleted ${esc(it.name)}`, () => { void restorePantrySnapshot(JSON.stringify(before)); }, 'trash');
   },
   closeSheet() { closeSheet(); },
 
@@ -1389,13 +1621,15 @@ const ACT = {
   shareTo(who) { closeSheet(); toast(who === 'link' ? 'Link copied' : `Sent to ${esc(who)}`, null, 'share'); },
   recipe(id) { openSheet(recipeSheet(R(id))); },
   useAsk(id) { const r = R(id); if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; } openSheet(useSheet(r)); },
-  useConfirm(id) {
-    const r = R(id); useRecipe(r); closeSheet();
+  async useConfirm(id) {
+    const r = R(id), before = snapshot(); useRecipe(r);
+    if (!await applyPantryTransition(JSON.parse(before), JSON.parse(snapshot()))) return;
+    closeSheet();
     const snap = S.undo;
     if (S.tab === 'reels') {
       const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0; render(); const f2 = $('#reelFeed'); if (f2) f2.scrollTop = st;
     } else render();
-    toast(`Pantry updated for ${esc(r.name)}`, () => { restore(snap); render(); });
+    toast(`Pantry updated for ${esc(r.name)}`, () => { void restorePantrySnapshot(snap); });
   },
   useNot() { closeSheet(); toast('No changes. Your pantry stays the same.', null, 'check'); },
   notYet(id, b) {
@@ -1410,12 +1644,12 @@ const ACT = {
   },
   storeSave() {
     const z = $('#zipIn').value; if (!/^\d{5}$/.test(z)) { $('#zipErr').hidden = false; $('#zipIn').classList.add('bad'); return; }
-    S.store = $('input[name="storePick"]:checked').value; S.zip = z; closeSheet(); render(); toast(`Showing deals from ${esc(S.store)}`, null, 'store');
+    S.store = $('input[name="storePick"]:checked').value; S.zip = z; persist(); closeSheet(); render(); toast(`Showing deals from ${esc(S.store)}`, null, 'store');
   },
   deals() { S.setPage = 'deals'; render(); },
   dealsBack() { S.setPage = null; render(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
-  resetDo() { doReset(); closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
+  async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
   async changePw(_, button) {
     if (!auth) return toast('Password reset is unavailable in the demo.', null, 'alert');
     button.disabled = true;
@@ -1475,7 +1709,8 @@ function enterApp() {
   if (DEMO) {
     try { localStorage.setItem(DEMO_SESSION_KEY, 'active'); } catch (_) {}
   }
-  S.auth = 'app'; S.chat = []; render(); loadPantry();
+  S.auth = 'app'; S.chat = []; render();
+  loadPantry(); loadUserAppState(); loadChatHistory();
 }
 
 /* ---------- Event wiring ---------- */
@@ -1487,8 +1722,8 @@ phone.addEventListener('click', e => {
 });
 phone.addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'sw_metric') { S.metric = t.checked; render(); toast(S.metric ? 'Showing metric units' : 'Showing US units', null, 'ruler'); }
-  if (t.id === 'sw_rem') { S.reminders = t.checked; render(); }
+  if (t.id === 'sw_metric') { S.metric = t.checked; persist(); render(); toast(S.metric ? 'Showing metric units' : 'Showing US units', null, 'ruler'); }
+  if (t.id === 'sw_rem') { S.reminders = t.checked; persist(); render(); }
   if (t.id === 'sw_face') { S.faceId = t.checked; toast(t.checked ? 'Face ID turned on' : 'Face ID turned off', null, 'face'); }
   if (t.id === 'sw_stay') { S.stayIn = t.checked; }
   if (t.dataset.qty) {
@@ -1644,5 +1879,3 @@ if (DEMO) {
   if (auth) auth.start();
 }
 })();
-
-

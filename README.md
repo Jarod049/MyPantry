@@ -48,7 +48,9 @@ Use an HTTP server locally, rather than opening `index.html` as a file. `npm run
 
 Connected mode uses Supabase Auth for sign-in, signup, email confirmation, password recovery, session restoration, and logout. Sessions persist on the same browser until sign-out or server-side expiry/revocation. Browser storage restrictions may prevent persistence. Demo bypasses are disabled in connected mode.
 
-Saved recipe preferences are stored locally under a key specific to each authenticated user. They are not yet synced across devices. Existing demo preferences are kept separate from real accounts.
+Navigation and unfinished scans remain browser-local. Demo data stays separate from real accounts.
+
+Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, ZIP code, and assistant conversations to Supabase. Apply the new migration in `supabase/migrations/20261026_sync_account_state.sql` before deploying this frontend. The migration adds owner-scoped tables and leaves legacy pantry and assistant rows untouched. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
 
 ## 6. Deploy
 
@@ -59,8 +61,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Sign up with a real email and complete confirmation if required.
 - Sign in, reload, and reopen the same site: the account remains signed in.
 - Sign out and reload: the login form remains visible.
-- Sign in as a second account: neither the first account's pantry nor its local saved recipes appear.
+- Sign in as a second account: neither the first account's pantry, recipe activity, settings, nor chat history appear.
 - Test the password-reset email and save a new password.
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
-The original pantry database integration supports loading and editing existing rows. Other prototype actions (including adding/deleting food) are not converted into complete database CRUD by this authentication change. See AUTH_SETUP.md for the existing-data ownership step and remaining limitations.
+Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.

@@ -13,6 +13,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   const w = dom.window;
   let listener, saved = id ? { user: user(id), access_token: 'test-session' } : null;
   const queries = [];
+  const mockTables = {};
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
   Object.entries(storage).forEach(([key, value]) => w.localStorage.setItem(key, JSON.stringify(value)));
@@ -30,21 +31,43 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       async signOut() { saved = null; listener('SIGNED_OUT', null); return {}; },
       async signUp() { return { data: { session: null } }; }
     },
-    from(table) { let inserted, owner; return {
-      insert(rows) { inserted = rows; queries.push({ table, insert: rows }); return this; },
-      select() {
-        if (!inserted) return this;
-        return (async () => {
-          if (insertWait) await insertWait;
-          if (insertError) return { data: null, error: new Error(insertError) };
-          const rows = inserted.map((r, i) => ({ ...r, ingredient_id: (database?.length || 0) + i + 1 }));
-          database?.push(...rows);
-          return { data: rows, error: null };
-        })();
-      },
-      eq(column, value) { owner = value; queries.push({ table, column, value }); return this; },
-      order() { return load ? load() : Promise.resolve({ data: (database || []).filter(r => r.auth_user_id === owner), error: null }); }
-    }; }
+    from(table) {
+      let action = null, rowsToWrite = null, single = false, limitCount = null;
+      const filters = {};
+      const builder = {
+        insert(rows) { action = 'insert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, insert: rowsToWrite }); return this; },
+        upsert(rows) { action = 'upsert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, upsert: rowsToWrite }); return this; },
+        select() { return this; },
+        eq(column, value) { filters[column] = value; queries.push({ table, column, value }); return this; },
+        order() { return this; },
+        limit(value) { limitCount = value; return this; },
+        maybeSingle() { single = true; return this; },
+        single() { single = true; return this; },
+        then(resolve, reject) { return Promise.resolve().then(async () => {
+          if (action === 'insert' || action === 'upsert') {
+            if (action === 'insert' && table === 'pantry_item' && insertWait) await insertWait;
+            if (action === 'insert' && table === 'pantry_item' && insertError) return { data: null, error: new Error(insertError) };
+            const target = table === 'pantry_item' ? (database || []) : (mockTables[table] ||= []);
+            const written = rowsToWrite.map((row, i) => ({ ...row, ...(table === 'pantry_item' ? { ingredient_id: (database?.length || 0) + i + 1 } : {}) }));
+            if (action === 'upsert') {
+              for (const row of written) {
+                const key = table === 'chat_conversations' ? 'conversation_id' : 'user_id';
+                const existing = target.findIndex(item => item[key] === row[key]);
+                if (existing < 0) target.push(row); else target[existing] = { ...target[existing], ...row };
+              }
+            } else target.push(...written);
+            return { data: written, error: null };
+          }
+          let result = table === 'pantry_item'
+            ? (load ? await load() : { data: (database || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null })
+            : { data: (mockTables[table] || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null };
+          let data = result.data;
+          if (Array.isArray(data) && limitCount != null) data = data.slice(0, limitCount);
+          return single ? { data: Array.isArray(data) ? data[0] || null : data, error: result.error } : { ...result, data };
+        }).then(resolve, reject); }
+      };
+      return builder;
+    }
   }) };
   w.eval(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
@@ -124,7 +147,7 @@ test('reviewed scan inserts the selected batch and restores it on reload', async
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
   assert.match(f.text(), /Pantry Pal/);
-  assert.deepEqual(f.queries, [{ table: 'pantry_item', column: 'auth_user_id', value: 'alice' }]);
+  assert.deepEqual(f.queries.filter(q => q.table === 'pantry_item'), [{ table: 'pantry_item', column: 'auth_user_id', value: 'alice' }]);
   f.click('[data-act="tab"][data-arg="settings"]');
   assert.match(f.text(), /alice@example.test/);
   f.click('[data-act="logout"]'); await tick(); assert.match(f.text(), /Sign in/);
@@ -133,8 +156,9 @@ test('actual app restores Alice, scopes pantry query, and signs out across reloa
 });
 test('token refresh preserves the current screen', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
-  f.click('[data-act="tab"][data-arg="settings"]'); f.emit('TOKEN_REFRESHED', 'alice'); await tick();
-  assert.match(f.text(), /Settings/); assert.equal(f.queries.length, 1);
+  f.click('[data-act="tab"][data-arg="settings"]'); const initialQueryCount = f.queries.length;
+  f.emit('TOKEN_REFRESHED', 'alice'); await tick();
+  assert.match(f.text(), /Settings/); assert.equal(f.queries.length, initialQueryCount);
 });
 test('reload restores the selected tab and settings subpage', async t => {
   const first = boot({ id: 'alice' }); t.after(() => first.dom.window.close()); await tick();

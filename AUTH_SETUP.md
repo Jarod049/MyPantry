@@ -19,9 +19,13 @@ The existing pantry policies grant anonymous read/write access to demo user 1. T
 
 ## Limits of this change
 
-- Pantry loading/editing now uses `auth_user_id`; the existing numeric user_id is retained. New accounts initially have an empty pantry until existing rows are assigned. The older prototype's in-memory add/delete/recipe-consumption flows are not rewritten here. Implementing full pantry CRUD requires provisioned app_user records or a separate schema migration because the legacy user_id is NOT NULL.
-- Saved recipes/preferences are isolated by account in local browser storage, not synced to Supabase. Legacy demo state is not automatically attached to a real user.
+- Pantry loading and writes use `auth_user_id`; the existing numeric `user_id` relationship remains for legacy rows. New accounts initially have an empty pantry until existing rows are assigned. See the account data sync follow-up below for the additive persistence migration.
+- Recipe activity and settings sync for signed-in accounts after the follow-up migration. Legacy browser state is imported once per account when no Supabase state row exists; demo state remains isolated.
 - “Stay signed in” is the default. There is no misleading Remember me checkbox. The SDK owns tokens and their refresh; application state never stores passwords.
 - Mocked regression tests validate app behavior, not the actual Supabase email service or deployed policies. Live validation is required before release.
+
+## Account data sync follow-up
+
+The follow-up migration `supabase/migrations/20261026_sync_account_state.sql` adds per-account settings, recipe activity, and assistant conversation tables with row-level security. Apply it after the two pantry migrations and before deploying the matching frontend. The frontend syncs pantry update/delete/recipe-use/reset actions, favorites, saved and watched recipes, recipe preferences, units, spoil reminders, preferred store and ZIP code, and assistant messages. It imports the existing account-specific browser settings once when no Supabase state row exists. Navigation and in-progress scans remain local. Do not apply the migration from the dashboard until the preview build has been reviewed.
 
 References: [Supabase Auth](https://supabase.com/docs/reference/javascript/auth), [auth events](https://supabase.com/docs/reference/javascript/auth-onauthstatechange), [row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security).
