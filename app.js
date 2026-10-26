@@ -314,14 +314,14 @@ if (DEMO) hydrate();
 function applySession(session, event) {
   const user = session?.user;
   if (!user) {
-    ++accountGeneration;
+    resetAIChat(); ++accountGeneration;
     $$('.toast', phone).forEach(t => t.remove());
     closeSheet(); S = freshState(); S.inv = []; S.auth = 'login';
     render(); return;
   }
   const changed = S.user?.id !== user.id;
   if (changed) {
-    ++accountGeneration;
+    resetAIChat(); ++accountGeneration;
     $$('.toast', phone).forEach(t => t.remove());
     closeSheet(); S = freshState(); S.inv = [];
     S.user = { id: user.id, email: user.email || '', name: user.user_metadata?.name || user.email?.split('@')[0] || 'User' };
@@ -640,7 +640,7 @@ function renderHome() {
       <button class="icon-btn" data-act="newChat" aria-label="Start a new chat">${ic('refresh')}</button></div>
     <div class="scroll" id="chatScroll"><div class="chat" id="chat" aria-live="polite">${S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join('')}</div></div>
     <div class="chips" aria-label="Suggestions">${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
-    <form class="composer" id="chatForm"><input class="input" id="chatIn" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
+    <form class="composer" id="chatForm"><input class="input" id="chatIn" maxlength="2000" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
 }
 function pushMsg(who, html) {
   S.chat.push({ who, html });
@@ -648,14 +648,45 @@ function pushMsg(who, html) {
   const d = document.createElement('div'); d.className = 'msg ' + who; d.innerHTML = html; chat.appendChild(d);
   const cs = $('#chatScroll'); cs.scrollTop = cs.scrollHeight;
 }
-function ask(text) {
-  if (!text.trim()) return;
+let chatRequest = null;
+let chatHistory = [];
+function resetAIChat() {
+  if (chatRequest) chatRequest.abort();
+  chatRequest = null; chatHistory = [];
+}
+async function ask(text) {
+  text = text.trim();
+  if (!text || chatRequest) return;
+  if (text.length > 2000) { toast('Keep messages under 2,000 characters.'); return; }
   pushMsg('user', `<p>${esc(text)}</p>`);
-  const chat = $('#chat');
-  const t = document.createElement('div'); t.className = 'msg bot typing'; t.innerHTML = '<i></i><i></i><i></i>'; chat.appendChild(t);
-  $('#chatScroll').scrollTop = 1e6;
+  if (DEMO) { pushMsg('bot', reply(text)); refreshBadge(); return; }
   const generation = accountGeneration;
-  setTimeout(() => { t.remove(); if (generation !== accountGeneration) return; pushMsg('bot', reply(text)); refreshBadge(); }, 650 + Math.random() * 400);
+  const controller = new AbortController(); chatRequest = controller;
+  const typing = document.createElement('div'); typing.className = 'msg bot typing';
+  typing.innerHTML = '<i></i><i></i><i></i>'; $('#chat')?.appendChild(typing);
+  const button = $('#chatForm button'); if (button) button.disabled = true;
+  const timer = setTimeout(() => controller.abort(), 55000);
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error || !data.session?.access_token) throw new Error('Please sign in again to chat.');
+    const response = await fetch(`${CFG.supabaseUrl}/functions/v1/pantry-chat`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseKey,
+        Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({ message: text, history: chatHistory.slice(-10) })
+    });
+    const result = await response.json();
+    if (!response.ok || typeof result.answer !== 'string') throw new Error(result.error || 'Chat is unavailable. Please try again.');
+    if (generation !== accountGeneration || chatRequest !== controller) return;
+    chatHistory.push({ role: 'user', content: text }, { role: 'assistant', content: result.answer.slice(0,2000) });
+    chatHistory = chatHistory.slice(-10);
+    pushMsg('bot', `<p>${esc(result.answer).replace(/\n/g, '<br>')}</p>`);
+  } catch (error) {
+    if (generation === accountGeneration && chatRequest === controller) pushMsg('bot', `<p>${esc(error.name === 'AbortError' ? 'The request timed out. Please try again.' : error.message)}</p>`);
+  } finally {
+    clearTimeout(timer); typing.remove();
+    if (chatRequest === controller) { chatRequest = null; const send = $('#chatForm button'); if (send) send.disabled = false; }
+  }
 }
 function refreshBadge() { persist(); const nav = $('.tabbar', app); if (nav) nav.outerHTML = tabbar(); }
 
@@ -1237,7 +1268,7 @@ const ACT = {
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
   goSoon() { S.tab = 'ing'; S.ingView = 'soon'; render(); },
   askFromSoon() { S.tab = 'home'; render(); ask("What's going bad?"); },
-  newChat() { S.chat = []; render(); },
+  newChat() { resetAIChat(); S.chat = []; render(); },
   chatClear(_, b) { b.closest('.actions').remove(); doReset(); pushMsg('bot', '<p>Done. I cleared your inventory and reset your Reels. Tap Scan whenever you want to log food again.</p>'); refreshBadge(); },
   chatCancel(_, b) { b.closest('.actions').remove(); pushMsg('bot', '<p>No problem. Your food is still there.</p>'); },
   madeDirect(id, b) { b.closest('.actions').remove(); ask(`I made ${R(id).name}`); },
@@ -1398,7 +1429,7 @@ const ACT = {
       if (auth) await auth.signOut();
       else {
         try { localStorage.removeItem(DEMO_SESSION_KEY); } catch (_) {}
-        ++accountGeneration; S = freshState(); hydrate(); closeSheet(); render();
+        resetAIChat(); ++accountGeneration; S = freshState(); hydrate(); closeSheet(); render();
       }
     } catch (error) { toast(`Could not sign out: ${esc(error.message)}`, null, 'alert'); }
     finally { if (button) button.disabled = false; }
@@ -1552,7 +1583,7 @@ function bindForms() {
   }
 
   const cf = $('#chatForm');
-  if (cf) cf.addEventListener('submit', e => { e.preventDefault(); const i = $('#chatIn'); const v = i.value; i.value = ''; ask(v); });
+  if (cf) cf.addEventListener('submit', e => { e.preventDefault(); if (chatRequest) return; const i = $('#chatIn'); const v = i.value; i.value = ''; ask(v); });
 }
 
 /* ---------- Tester guide ---------- */
@@ -1613,4 +1644,5 @@ if (DEMO) {
   if (auth) auth.start();
 }
 })();
+
 

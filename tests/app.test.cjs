@@ -11,7 +11,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
   const w = dom.window;
-  let listener, saved = id ? { user: user(id) } : null;
+  let listener, saved = id ? { user: user(id), access_token: 'test-session' } : null;
   const queries = [];
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
@@ -195,3 +195,23 @@ test('recovery event opens the real password form and keeps it through refresh',
   f.emit('TOKEN_REFRESHED', 'alice'); await tick(); assert.match(f.text(), /Choose a new password/);
 });
 
+
+
+test('AI chat escapes output, sends follow-ups, and resets conversation', async t => {
+  const f = boot({id:'alice'}); t.after(() => f.dom.window.close()); await tick();
+  const calls=[];
+  f.w.fetch=async (url, options) => { calls.push(JSON.parse(options.body)); return {ok:true,json:async()=>({answer:'<img src=x onerror=alert(1)>\\nUse eggs.'})}; };
+  f.form('#chatForm',{chatIn:'Dinner ideas?'}); await tick();
+  assert.match(f.text(), /<img src=x/); assert.equal(f.w.document.querySelector('#chat img'),null);
+  f.form('#chatForm',{chatIn:'What else?'}); await tick();
+  assert.equal(calls[1].history.length,2);
+  f.click('[data-act="newChat"]');
+  f.form('#chatForm',{chatIn:'Start again'}); await tick(); assert.equal(calls[2].history.length,0);
+});
+test('AI response arriving after account switch is discarded',async t=>{
+ const f=boot({id:'alice'});t.after(()=>f.dom.window.close());await tick();let finish;
+ f.w.fetch=()=>new Promise(resolve=>finish=resolve);
+ f.form('#chatForm',{chatIn:'Dinner?'});await tick();f.emit('SIGNED_IN','bob');await tick();
+ finish({ok:true,json:async()=>({answer:'ALICE PRIVATE ANSWER'})});await tick();
+ assert.doesNotMatch(f.text(),/ALICE PRIVATE ANSWER/);
+});
