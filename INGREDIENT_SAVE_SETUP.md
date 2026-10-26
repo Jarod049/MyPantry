@@ -10,15 +10,16 @@ through the database. New rows use the signed-in Auth UUID, never shared user 1.
 
 ## Release order
 
-1. Approve and apply `supabase/migrations/20261015_pantry_insert.sql` to the
-   existing project. It preserves existing rows and numeric foreign keys, permits
-   Auth-owned rows without a legacy numeric user, adds an owner-required check,
-   and adds an authenticated INSERT policy requiring the caller's own UUID and
-   a null legacy user ID. RLS stays enabled. Anonymous access stays blocked by
-   the existing restrictive account boundary.
-2. Merge this change to deploy the frontend through the existing Pages workflow.
+1. Confirm the existing project has both `20261015` pantry migrations applied.
+   The insert migration preserves rows and numeric foreign keys, permits
+   Auth-owned rows without a legacy numeric user, and keeps ownership checks in
+   place under RLS.
+2. Review and apply `supabase/migrations/20261026_sync_account_state.sql` before
+   deploying the matching frontend. It adds account-state and assistant-history
+   tables without altering existing pantry rows.
+3. Merge this change to deploy the frontend through the existing Pages workflow.
    Config values continue to come from Actions secrets, not a committed config.
-3. Sign in, manually add an ingredient with quantity, storage and expiry, reload,
+4. Sign in, manually add an ingredient with quantity, storage and expiry, reload,
    and verify it remains. Repeat using a reviewed receipt scan. Verify a second
    account cannot see it.
 
@@ -31,6 +32,8 @@ The UI tests use a simulated database. Live Supabase role checks also passed:
 authenticated insert/read/update, cross-account read/update denial, forged-owner
 insert denial, and anonymous read/insert denial. Test rows were rolled back.
 
-Scope: this fixes ingredient creation and storage/expiry edits. The prototype's
-delete, recipe-consumption, and reset flows still need separate database writes.
-Previously lost in-memory additions cannot be recovered from Supabase.
+Scope: authenticated pantry additions, edits, deletion, recipe consumption and
+reset now write through to Supabase. Saved, liked and watched recipes, recipe
+preferences, units, spoil reminders, preferred store, ZIP code, and assistant
+conversations also sync per account after the follow-up migration. Previously lost in-memory pantry
+additions cannot be recovered from Supabase.
