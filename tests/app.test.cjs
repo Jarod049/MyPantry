@@ -139,7 +139,7 @@ test('insert completing after logout cannot expose data in the signed-out screen
   enterIngredient(f); f.emit('SIGNED_OUT', null); await tick(); finish(); await tick();
   assert.match(f.text(), /Sign in/); assert.doesNotMatch(f.text(), /Persistence test apples/);
 });
-function receiptPhoto(f, selector = '#receiptCam') {
+function receiptPhoto(f, selector = '#photoCam') {
   const input = f.w.document.querySelector(selector); assert.ok(input, selector);
   const file = new f.w.File([new Uint8Array([255, 216, 255, 224])], 'receipt.jpg', { type: 'image/jpeg' });
   Object.defineProperty(input, 'files', { value: [file] });
@@ -164,6 +164,7 @@ test('real receipt photo is read by the receipt-scan function, reviewed, and sav
   assert.match(calls[0].url, /\/functions\/v1\/receipt-scan$/);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer test-session');
   assert.match(JSON.parse(calls[0].options.body).image, /^data:image\/jpeg;base64,/);
+  assert.equal(JSON.parse(calls[0].options.body).kind, 'receipt');
   assert.match(f.text(), /We found 3 items/);
   assert.match(f.text(), /CHKN THIGHS/);
   f.click('[data-act="reviewToggle"][data-arg]'); // remove the first item
@@ -180,7 +181,7 @@ test('receipt text from the AI is escaped on the review screen', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
   f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: true, store_name: '<b>X</b>', items: [{ name: '<img src=x onerror=alert(1)>', receipt_text: '<script>1</script>', category: 'Bad', quantity: -2, unit: 'tons', storage: 'Roof' }] }) });
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
-  receiptPhoto(f, '#receiptPick'); await settle();
+  receiptPhoto(f, '#photoPick'); await settle();
   assert.equal(f.w.document.querySelector('.rv img, .rv script'), null);
   assert.match(f.text(), /<img src=x/);
   assert.match(f.text(), /Other/);
@@ -212,22 +213,55 @@ test('non-image files are rejected before upload', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
   let called = false; f.w.fetch = async () => { called = true; return { ok: true, json: async () => RECEIPT }; };
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
-  const input = f.w.document.querySelector('#receiptPick');
+  const input = f.w.document.querySelector('#photoPick');
   Object.defineProperty(input, 'files', { value: [new f.w.File(['hi'], 'notes.txt', { type: 'text/plain' })] });
   input.dispatchEvent(new f.w.Event('change', { bubbles: true })); await settle();
   assert.equal(called, false);
-  assert.match(f.w.document.querySelector('.cam-error').textContent, /photo of your receipt/);
+  assert.match(f.w.document.querySelector('.cam-error').textContent, /choose a photo/i);
 });
-test('fridge photo scan (still simulated) inserts the selected batch', async t => {
+test('fridge photo is read by the scan function, uses printed dates, and saves', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  const calls = [];
+  f.w.fetch = async (url, options) => { calls.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ readable: true, store_name: null, items: [
+    { name: 'Greek yogurt', category: 'Dairy', quantity: 32, unit: 'oz', storage: 'Fridge', label_date: '2030-02-14' },
+    { name: 'Apples', category: 'Produce', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Frozen peas', category: 'Frozen', quantity: 1, unit: 'bag', storage: 'Freezer', label_date: '2030-03-01' }
+  ] }) }; };
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="pantry"]');
+  assert.equal(f.w.document.querySelector('.demo-toggle'), null);
+  assert.match(f.text(), /Snap your fridge/);
+  receiptPhoto(f); await settle();
+  assert.equal(calls.length, 1); assert.equal(calls[0].kind, 'pantry');
+  assert.match(f.text(), /We found 3 items/);
+  assert.match(f.text(), /Read from label/);
+  f.click('[data-act="confirmScan"]'); await tick();
+  assert.equal(database.length, 3);
+  assert.ok(database.every(r => r.way_added === 'pantry_photo' && r.auth_user_id === 'alice'));
+  const yogurt = database.find(r => r.ingredient_name === 'Greek yogurt');
+  assert.equal(yogurt.expiration_date, '2030-02-14'); assert.equal(yogurt.expiration_source, 'label');
+  const peas = database.find(r => r.ingredient_name === 'Frozen peas');
+  assert.equal(peas.expiration_source, 'ai'); assert.equal(peas.storage_location, 'Freezer');
+  assert.equal(database.find(r => r.ingredient_name === 'Apples').expiration_source, 'ai');
+});
+test('empty fridge photo shows a friendly error', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: true, store_name: null, items: [] }) });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="pantry"]');
+  receiptPhoto(f); await settle();
+  assert.match(f.w.document.querySelector('.cam-error').textContent, /didn't spot any food/);
+});
+test('bar code scan (still simulated) inserts the item', async t => {
   const database = [];
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="scan"]');
-  f.click('[data-act="startScan"][data-arg="pantry"]');
+  f.click('[data-act="startScan"][data-arg="barcode"]');
   f.click('[data-act="shutter"]');
   await new Promise(r => setTimeout(r, 1450));
   f.click('[data-act="confirmScan"]'); await tick();
-  assert.ok(database.length > 1);
-  assert.ok(database.every(r => r.way_added === 'pantry_photo' && r.auth_user_id === 'alice'));
+  assert.equal(database.length, 1);
+  assert.equal(database[0].way_added, 'barcode');
 });
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
