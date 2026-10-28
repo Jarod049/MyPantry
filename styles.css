@@ -518,6 +518,13 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .shutter:active i { transform: scale(.9); }
 .cam-side { width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.12); border: 0; color: #fff; display: grid; place-items: center; }
 .cam-side svg { width: 20px; height: 20px; }
+label.shutter, label.cam-side { cursor: pointer; }
+.rc-preview { width: 100%; height: 100%; object-fit: contain; background: #2a2f2d; }
+.rc-empty { display: grid; justify-items: center; gap: 10px; padding: 0 36px; text-align: center; color: rgba(255,255,255,.85); }
+.rc-empty svg { width: 46px; height: 46px; color: #f2b632; }
+.rc-empty b { font-size: 17px; }
+.rc-empty span { font-size: 13.5px; line-height: 1.45; color: rgba(255,255,255,.65); }
+.rc-line { font-family: ui-monospace, Menlo, monospace; font-size: .92em; opacity: .75; }
 .analyzing { position: absolute; inset: 0; background: rgba(7,10,9,.72); display: grid; place-items: center; align-content: center; gap: 14px; z-index: 3; font-weight: 600; }
 .spinner { width: 46px; height: 46px; border-radius: 50%; border: 4px solid rgba(255,255,255,.2); border-top-color: #57e39f; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

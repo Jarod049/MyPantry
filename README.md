@@ -65,4 +65,6 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Test the password-reset email and save a new password.
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
+Receipt photos are read by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
+
 Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.

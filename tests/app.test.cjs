@@ -139,20 +139,95 @@ test('insert completing after logout cannot expose data in the signed-out screen
   enterIngredient(f); f.emit('SIGNED_OUT', null); await tick(); finish(); await tick();
   assert.match(f.text(), /Sign in/); assert.doesNotMatch(f.text(), /Persistence test apples/);
 });
-test('reviewed scan inserts the selected batch and restores it on reload', async t => {
+function receiptPhoto(f, selector = '#receiptCam') {
+  const input = f.w.document.querySelector(selector); assert.ok(input, selector);
+  const file = new f.w.File([new Uint8Array([255, 216, 255, 224])], 'receipt.jpg', { type: 'image/jpeg' });
+  Object.defineProperty(input, 'files', { value: [file] });
+  input.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+}
+const RECEIPT = { readable: true, store_name: 'Smith\'s', items: [
+  { name: 'Chicken thighs', receipt_text: 'CHKN THIGHS', category: 'Meat & Seafood', quantity: 1.5, unit: 'lb', storage: 'Fridge' },
+  { name: 'Avocados', receipt_text: 'AVOCADO 4CT', category: 'Produce', quantity: 4, unit: 'ct', storage: 'Pantry' },
+  { name: 'Frozen waffles', receipt_text: 'WAFFLES FRZ', category: 'Frozen', quantity: 1, unit: 'box', storage: 'Freezer' }
+] };
+const settle = () => new Promise(r => setTimeout(r, 60));
+test('real receipt photo is read by the receipt-scan function, reviewed, and saved', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  const calls = [];
+  f.w.fetch = async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => RECEIPT }; };
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="receipt"]');
+  assert.equal(f.w.document.querySelector('.demo-toggle'), null);
+  receiptPhoto(f); await settle();
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/functions\/v1\/receipt-scan$/);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer test-session');
+  assert.match(JSON.parse(calls[0].options.body).image, /^data:image\/jpeg;base64,/);
+  assert.match(f.text(), /We found 3 items/);
+  assert.match(f.text(), /CHKN THIGHS/);
+  f.click('[data-act="reviewToggle"][data-arg]'); // remove the first item
+  f.click('[data-act="confirmScan"]'); await tick();
+  assert.equal(database.length, 2);
+  assert.ok(database.every(r => r.way_added === 'receipt' && r.auth_user_id === 'alice' && r.expiration_source === 'ai'));
+  assert.deepEqual(database.map(r => [r.ingredient_name, r.quantity, r.measurement, r.storage_location]),
+    [['Avocados', 4, 'ct', 'Pantry'], ['Frozen waffles', 1, 'box', 'Freezer']]);
+  const reloaded = boot({ id: 'alice', database }); t.after(() => reloaded.dom.window.close()); await tick();
+  reloaded.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(reloaded.text(), /Frozen waffles/);
+});
+test('receipt text from the AI is escaped on the review screen', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: true, store_name: '<b>X</b>', items: [{ name: '<img src=x onerror=alert(1)>', receipt_text: '<script>1</script>', category: 'Bad', quantity: -2, unit: 'tons', storage: 'Roof' }] }) });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f, '#receiptPick'); await settle();
+  assert.equal(f.w.document.querySelector('.rv img, .rv script'), null);
+  assert.match(f.text(), /<img src=x/);
+  assert.match(f.text(), /Other/);
+});
+test('receipt scan errors are shown and nothing is saved', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: false, json: async () => ({ error: 'You reached the 20-receipt hourly limit.' }) });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle();
+  assert.match(f.w.document.querySelector('.cam-error').textContent, /20-receipt hourly limit/);
+  f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: false, store_name: null, items: [] }) });
+  f.click('[data-act="retake"]'); assert.equal(f.w.document.querySelector('.cam-error'), null);
+  receiptPhoto(f); await settle();
+  assert.match(f.w.document.querySelector('.cam-error').textContent, /couldn't read this receipt/);
+  assert.equal(database.length, 0);
+});
+test('receipt result arriving after cancel or account switch is discarded', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let finish; f.w.fetch = () => new Promise(r => { finish = r; });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle();
+  assert.match(f.text(), /Reading your receipt/);
+  f.emit('SIGNED_IN', 'bob'); await tick();
+  finish({ ok: true, json: async () => RECEIPT }); await settle();
+  assert.doesNotMatch(f.text(), /We found/);
+});
+test('non-image files are rejected before upload', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let called = false; f.w.fetch = async () => { called = true; return { ok: true, json: async () => RECEIPT }; };
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  const input = f.w.document.querySelector('#receiptPick');
+  Object.defineProperty(input, 'files', { value: [new f.w.File(['hi'], 'notes.txt', { type: 'text/plain' })] });
+  input.dispatchEvent(new f.w.Event('change', { bubbles: true })); await settle();
+  assert.equal(called, false);
+  assert.match(f.w.document.querySelector('.cam-error').textContent, /photo of your receipt/);
+});
+test('fridge photo scan (still simulated) inserts the selected batch', async t => {
   const database = [];
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="scan"]');
-  f.click('[data-act="startScan"][data-arg="receipt"]');
+  f.click('[data-act="startScan"][data-arg="pantry"]');
   f.click('[data-act="shutter"]');
   await new Promise(r => setTimeout(r, 1450));
   f.click('[data-act="confirmScan"]'); await tick();
   assert.ok(database.length > 1);
-  assert.ok(database.every(r => r.way_added === 'receipt' && r.auth_user_id === 'alice'));
-  assert.equal(f.queries.filter(q => q.table === 'pantry_item' && q.insert).length, 1);
-  const reloaded = boot({ id: 'alice', database }); t.after(() => reloaded.dom.window.close()); await tick();
-  reloaded.click('[data-act="tab"][data-arg="ing"]');
-  assert.match(reloaded.text(), /Chicken thighs/);
+  assert.ok(database.every(r => r.way_added === 'pantry_photo' && r.auth_user_id === 'alice'));
 });
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();
