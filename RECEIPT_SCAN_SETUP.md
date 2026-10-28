@@ -1,4 +1,4 @@
-# Receipt scanning
+# Receipt and fridge photo scanning
 
 In connected mode, **Scan → Take a picture of your receipt** now reads a real
 photo. Demo mode (`DEMO_MODE=true`) keeps the simulated Smith's receipt.
@@ -46,4 +46,13 @@ apply).
   confirm the rest appear on the Ingredients tab. Try a blurry photo and a
   non-receipt photo and confirm a clear error appears.
 
-The pantry/fridge photo and barcode options are still simulated.
+## Fridge and pantry photos
+
+**Scan → Take a picture of your pantry or fridge** uses the same function with
+`kind: "pantry"` and a separate prompt. It lists each food or drink it can see,
+counts loose items, and reads best-by/use-by dates only when they are clearly
+printed on the package. A readable date is shown as "Read from label";
+everything else gets the usual shelf-life estimate. Freezer items always use
+the estimate. Receipts and fridge photos share the 20-scans-per-hour limit.
+
+The barcode option is still simulated.
