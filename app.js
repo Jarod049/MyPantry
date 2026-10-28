@@ -1323,8 +1323,11 @@ function scanMenu() {
     <div class="tip"><b>Tip:</b> Photos work best in good light with labels facing the camera. We read best-by dates when we can see them and estimate the rest.</div>
   </div>`;
 }
+// Receipts are read for real when connected to Supabase; demo mode keeps the simulation.
+const realReceipt = sc => !DEMO && sc.mode === 'receipt';
 function renderCamera() {
   const sc = S.scan;
+  if (realReceipt(sc)) return renderReceiptCamera(sc);
   const titles = { pantry: 'Photo of pantry or fridge', receipt: 'Photo of receipt', barcode: 'Scan bar code' };
   const hints = { pantry: 'Fit your shelves in the frame, then tap the button.', receipt: 'Lay the receipt flat and fit it in the frame.', barcode: 'Line up the bar code inside the frame.' };
   let scene = '';
@@ -1348,6 +1351,87 @@ function renderCamera() {
     ${sc.stage === 'error' ? `<div class="cam-error" role="alert"><div class="eh">${ic('alert')}<b>${errMsg}</b></div><div class="btns">${errBtns}</div></div>` : ''}
   </div>`;
 }
+function renderReceiptCamera(sc) {
+  const scene = sc.preview
+    ? `<img class="rc-preview" src="${sc.preview}" alt="Your receipt photo">`
+    : `<div class="rc-empty">${ic('receipt')}<b>Snap your grocery receipt</b><span>Lay it flat in good light. Long receipts can be folded so the food lines fit in one photo.</span></div>`;
+  return `<div class="camera" role="dialog" aria-label="Photo of receipt">
+    <div class="cam-top"><button class="close" data-act="scanCancel" aria-label="Close camera">${ic('x')}</button><b>Photo of receipt</b><span style="width:34px"></span></div>
+    <div class="viewfinder">${scene}<div class="vf-corners"><i></i><i></i><i></i><i></i></div>
+      ${sc.stage === 'analyzing' ? `<div class="analyzing"><div class="spinner"></div>Reading your receipt…</div>` : ''}</div>
+    <div class="cam-hint">Take a photo, or choose one you already took.</div>
+    <input type="file" id="receiptCam" accept="image/*" capture="environment" hidden>
+    <input type="file" id="receiptPick" accept="image/*" hidden>
+    <div class="cam-bottom"><label class="cam-side" for="receiptPick" aria-label="Choose a photo" title="Choose a photo">${ic('receipt')}</label><label class="shutter" for="receiptCam" aria-label="Take photo" role="button"><i></i></label><button class="cam-side" data-act="manual" aria-label="Type it instead">${ic('pencil')}</button></div>
+    ${sc.stage === 'error' ? `<div class="cam-error" role="alert"><div class="eh">${ic('alert')}<b>${esc(sc.error || "We couldn't read this receipt.")}</b></div><div class="btns"><button class="btn btn-primary" data-act="retake">${ic('camera')} Try another photo</button><button class="btn btn-ghost" data-act="manual">Enter it myself</button></div></div>` : ''}
+  </div>`;
+}
+const RECEIPT_MAX_SIDE = 2400;
+async function receiptImage(file) {
+  if (file.type && !/^image\//.test(file.type)) throw new Error('Please choose a photo of your receipt.');
+  // Shrink large phone photos before upload; also normalizes HEIC and rotation where supported.
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, RECEIPT_MAX_SIDE / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+      const ctx = c.getContext('2d');
+      if (ctx) { ctx.drawImage(bmp, 0, 0, c.width, c.height); bmp.close?.(); return c.toDataURL('image/jpeg', 0.85); }
+    } catch (_) { /* fall back to the original file */ }
+  }
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error('This photo format is not supported. Please use a JPG or PNG photo.');
+  if (file.size > 5000000) throw new Error('That photo is too large. Please use one under 5 MB.');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Couldn't open that photo. Please try another."));
+    reader.readAsDataURL(file);
+  });
+}
+function receiptItem(r) {
+  const cat = CATS.includes(r.category) ? r.category : 'Other';
+  const store = ['Fridge', 'Pantry', 'Freezer'].includes(r.storage) ? r.storage : 'Pantry';
+  const qty = Number(r.quantity) > 0 ? Number(r.quantity) : 1;
+  return { tid: 't' + (uid++), name: String(r.name).slice(0, 60), emoji: guessEmoji(String(r.name)), cat,
+    unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: 'ai',
+    exp: estimate(cat, store), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
+}
+async function scanReceipt(file) {
+  const sc = S.scan;
+  if (!file || !sc || !realReceipt(sc) || sc.stage === 'analyzing') return;
+  const generation = accountGeneration;
+  const current = () => S.scan === sc && generation === accountGeneration;
+  const fail = message => { if (!current()) return; sc.stage = 'error'; sc.error = message; render(); };
+  sc.stage = 'analyzing'; sc.error = null; render();
+  let image;
+  try { image = await receiptImage(file); } catch (error) { fail(error.message); return; }
+  if (!current()) return;
+  sc.preview = image; render();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 75000);
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error || !data.session?.access_token) throw new Error('Please sign in again to scan receipts.');
+    const response = await fetch(`${CFG.supabaseUrl}/functions/v1/receipt-scan`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseKey, Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({ image })
+    });
+    let result = {};
+    try { result = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(result.error || 'Receipt scanning is unavailable. Please try again.');
+    if (!current()) return;
+    const items = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(receiptItem);
+    if (!items.length) {
+      fail(result.readable === false ? "We couldn't read this receipt. Lay it flat in good light and try again." : "We didn't find any food on this receipt.");
+      return;
+    }
+    sc.items = items; sc.storeName = result.store_name || null; sc.stage = 'review'; render();
+  } catch (error) {
+    fail(error.name === 'AbortError' ? 'Reading the receipt took too long. Please try again.' : error.message);
+  } finally { clearTimeout(timer); }
+}
 function buildDetected(mode) {
   return DETECT[mode].map(d => ({
     tid: 't' + (uid++), name: d.name, emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
@@ -1358,7 +1442,7 @@ function buildDetected(mode) {
 function renderReview() {
   const sc = S.scan;
   const on = sc.items.filter(i => i.on).length;
-  const srcLine = { pantry: 'your fridge photo', receipt: `your ${S.store} receipt`, barcode: 'the bar code' }[sc.mode];
+  const srcLine = { pantry: 'your fridge photo', receipt: `your ${esc(sc.storeName || S.store)} receipt`, barcode: 'the bar code' }[sc.mode];
   const now = new Date();
   return `<div class="appbar" style="padding-bottom:4px"><button class="back" data-act="scanCancel">${ic('left')} Cancel</button></div>
   <div class="scroll">
@@ -1375,7 +1459,7 @@ function reviewCard(i) {
   const tmp = { exp: i.exp };
   const d = daysLeft(tmp);
   return `<div class="rv ${i.on ? '' : 'off'}" data-tid="${i.tid}">
-    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}</span></div>
+    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${u === 'ct' ? 'count' : u}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
@@ -1690,10 +1774,10 @@ const ACT = {
   manual() { closeSheet(); if (S.scan && S.scan.stage !== 'review') S.scan = null; S.tab = 'scan'; render(); openItemForm({ store: 'Fridge', cat: 'Other' }, 'new'); },
   manualInReview() { openItemForm({ store: 'Fridge', cat: 'Other', qty: 1, unit: 'ct' }, 'reviewNew'); },
   demo(arg) { S.scan.demo = arg; if (S.scan.stage === 'error') S.scan.stage = 'camera'; render(); },
-  retake() { S.scan.stage = 'camera'; S.scan.demo = 'good'; render(); },
+  retake() { Object.assign(S.scan, { stage: 'camera', demo: 'good', preview: null, error: null }); render(); },
   scanCancel() { S.scan = null; render(); },
   shutter() {
-    const sc = S.scan; if (sc.stage === 'analyzing') return;
+    const sc = S.scan; if (sc.stage === 'analyzing' || realReceipt(sc)) return;
     sc.stage = 'analyzing'; render();
     setTimeout(() => {
       if (!S.scan || S.scan !== sc) return;
@@ -1878,6 +1962,7 @@ phone.addEventListener('click', e => {
 });
 phone.addEventListener('change', e => {
   const t = e.target;
+  if (t.id === 'receiptCam' || t.id === 'receiptPick') { void scanReceipt(t.files && t.files[0]); return; }
   if (t.id === 'sw_metric') { S.metric = t.checked; persist(); render(); toast(S.metric ? 'Showing metric units' : 'Showing US units', null, 'ruler'); }
   if (t.id === 'sw_rem') { S.reminders = t.checked; persist(); render(); }
   if (t.id === 'sw_face') { S.faceId = t.checked; toast(t.checked ? 'Face ID turned on' : 'Face ID turned off', null, 'face'); }
