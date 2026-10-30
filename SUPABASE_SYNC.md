@@ -28,15 +28,18 @@ migration.
 
 1. Confirm that `20261015_pantry_auth_owner.sql` and
    `20261015_pantry_insert.sql` have been applied to the target project.
-2. Review and apply `supabase/migrations/20261026_sync_account_state.sql` in the
+2. Review and apply `supabase/migrations/20261030_pantry_account_delete.sql` in
+   the Supabase SQL Editor. It grants authenticated users delete access only to
+   pantry rows owned by their Auth account, enabling remove and reset actions.
+3. Review and apply `supabase/migrations/20261026_sync_account_state.sql` in the
    Supabase SQL Editor. It creates `user_app_state`, `chat_conversations`, and
    `chat_messages`, and enables owner-scoped row-level security on each table.
-3. Review and apply `supabase/migrations/20261026_app_session_tracking.sql` in
+4. Review and apply `supabase/migrations/20261026_app_session_tracking.sql` in
    the Supabase SQL Editor. It creates the owner-scoped `app_sessions` table.
-4. Deploy the matching frontend through the existing Pages workflow. It uses
+5. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-5. In a preview build, sign in and check that pantry edits, deletion, recipe
+6. In a preview build, sign in and check that pantry edits, deletion, recipe
    consumption, recipe activity, settings, and chat messages remain after a
    reload. Check two accounts to confirm they cannot see each other's records.
 

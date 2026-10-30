@@ -28,4 +28,11 @@ The existing pantry policies grant anonymous read/write access to demo user 1. T
 
 The follow-up migration `supabase/migrations/20261026_sync_account_state.sql` adds per-account settings, recipe activity, and assistant conversation tables with row-level security. Apply it after the two pantry migrations and before deploying the matching frontend. The frontend syncs pantry update/delete/recipe-use/reset actions, favorites, saved and watched recipes, recipe preferences, units, spoil reminders, preferred store and ZIP code, and assistant messages. It imports the existing account-specific browser settings once when no Supabase state row exists. Navigation and in-progress scans remain local. Do not apply the migration from the dashboard until the preview build has been reviewed.
 
+The follow-up migration `supabase/migrations/20261030_pantry_account_delete.sql`
+adds the missing owner-scoped DELETE policy and database grant for authenticated
+users. Apply it to projects that already have the pantry ownership migrations;
+without it, remove-item, recipe consumption that empties an item, and Reset
+inventory cannot delete pantry rows. The existing restrictive ownership policy
+continues to limit deletion to the signed-in user's own rows.
+
 References: [Supabase Auth](https://supabase.com/docs/reference/javascript/auth), [auth events](https://supabase.com/docs/reference/javascript/auth-onauthstatechange), [row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security).
