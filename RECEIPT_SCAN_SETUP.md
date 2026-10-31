@@ -30,11 +30,11 @@ apply).
 2. Reuse the `OPENAI_API_KEY` secret from Pantry Pal chat. Optionally set
    `RECEIPT_MODEL` to a vision-capable model; otherwise `OPENAI_MODEL` or the
    chat default is used.
-3. Deploy: `supabase functions deploy receipt-scan --no-verify-jwt`. The handler
+3. Deploy: `npx supabase functions deploy receipt-scan --no-verify-jwt`. The handler
    verifies tokens itself, the same as `pantry-chat`.
-4. CORS allows `https://jarod049.github.io`. For local or preview testing, set
-   the `ALLOWED_ORIGINS` secret to a comma-separated list, for example
-   `http://127.0.0.1:4173`.
+4. CORS allows `https://jarod049.github.io` plus port 4173 on localhost,
+   loopback, and private LAN addresses automatically. Use the `ALLOWED_ORIGINS`
+   secret only for separately hosted previews.
 5. Merge the frontend to deploy through the existing Pages workflow.
 
 ## Verify
@@ -55,4 +55,5 @@ printed on the package. A readable date is shown as "Read from label";
 everything else gets the usual shelf-life estimate. Freezer items always use
 the estimate. Receipts and fridge photos share the 20-scans-per-hour limit.
 
-The barcode option is still simulated.
+The barcode option uses its own `barcode-lookup` function; see
+`BARCODE_SETUP.md` for its backend setup.

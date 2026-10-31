@@ -1,8 +1,26 @@
 // Secrets remain in Supabase, never in the website bundle.
 const env = (key) => Deno.env.get(key) || '';
-const cors = { 'Access-Control-Allow-Origin': 'https://jarod049.github.io', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' };
-const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+const ORIGINS = ['https://jarod049.github.io', ...env('ALLOWED_ORIGINS').split(',').map(s => s.trim()).filter(Boolean)];
+const isLocalDevelopmentOrigin = (origin) => {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' || url.port !== '4173') return false;
+    const host = url.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return true;
+    const octets = host.split('.').map(Number);
+    if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return false;
+    return octets[0] === 10
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168);
+  } catch { return false; }
+};
+const corsFor = (req) => {
+  const origin = req.headers.get('Origin') || '';
+  return { 'Access-Control-Allow-Origin': ORIGINS.includes(origin) || isLocalDevelopmentOrigin(origin) ? origin : ORIGINS[0], 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' };
+};
 export async function handler(req) {
+  const cors = corsFor(req);
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
   try {

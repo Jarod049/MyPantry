@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -16,6 +16,28 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   const mockTables = Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
+  if (camera) {
+    Object.defineProperty(w.navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: camera.getUserMedia } });
+    Object.defineProperties(w.HTMLVideoElement.prototype, {
+      readyState: { configurable: true, get: () => 4 },
+      videoWidth: { configurable: true, get: () => 1280 },
+      videoHeight: { configurable: true, get: () => 720 }
+    });
+    w.HTMLVideoElement.prototype.play = async function () {};
+    w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {} });
+    w.HTMLCanvasElement.prototype.toBlob = function (callback) {
+      callback(new w.Blob([new Uint8Array([255, 216, 255, 224])], { type: 'image/jpeg' }));
+    };
+  }
+  if (barcodeResult) {
+    w.Image = class {
+      constructor() { this.naturalWidth = 1200; this.naturalHeight = 800; }
+      set src(_value) { w.setTimeout(() => this.onload?.(), 0); }
+    };
+    w.ZXingBrowser = { BrowserMultiFormatOneDReader: class {
+      async decodeFromImageUrl() { return { getText: () => barcodeResult }; }
+    } };
+  }
   Object.entries(storage).forEach(([key, value]) => w.localStorage.setItem(key, JSON.stringify(value)));
   Object.entries(navigation).forEach(([key, value]) => w.sessionStorage.setItem(key, JSON.stringify(value)));
   w.MYPANTRY_CONFIG = { supabaseUrl: 'https://example.supabase.co', supabaseKey: 'test', ...config };
@@ -145,12 +167,50 @@ function receiptPhoto(f, selector = '#photoCam') {
   Object.defineProperty(input, 'files', { value: [file] });
   input.dispatchEvent(new f.w.Event('change', { bubbles: true }));
 }
+function barcodePhoto(f, selector = '#barcodeCam') {
+  const input = f.w.document.querySelector(selector); assert.ok(input, selector);
+  const file = new f.w.File([new Uint8Array([255, 216, 255, 224])], 'barcode.jpg', { type: 'image/jpeg' });
+  Object.defineProperty(input, 'files', { value: [file] });
+  input.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+}
 const RECEIPT = { readable: true, store_name: 'Smith\'s', items: [
   { name: 'Chicken thighs', receipt_text: 'CHKN THIGHS', category: 'Meat & Seafood', quantity: 1.5, unit: 'lb', storage: 'Fridge' },
   { name: 'Avocados', receipt_text: 'AVOCADO 4CT', category: 'Produce', quantity: 4, unit: 'ct', storage: 'Pantry' },
   { name: 'Frozen waffles', receipt_text: 'WAFFLES FRZ', category: 'Frozen', quantity: 1, unit: 'box', storage: 'Freezer' }
 ] };
 const settle = () => new Promise(r => setTimeout(r, 60));
+test('scan options open a live camera and the shutter captures one frame', async t => {
+  const requests = [], tracks = [];
+  const camera = { getUserMedia: async constraints => {
+    requests.push(constraints);
+    const track = { stopped: false, stop() { this.stopped = true; } }; tracks.push(track);
+    return { getTracks: () => [track] };
+  } };
+  const f = boot({ id: 'alice', database: [], camera }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: true, json: async () => RECEIPT });
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="receipt"]');
+  await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].video.facingMode.ideal, 'environment');
+  assert.ok(f.w.document.querySelector('#cameraFeed'));
+  assert.equal(f.w.document.querySelector('[data-act="cameraShutter"]').disabled, false);
+  assert.ok(f.w.document.querySelector('#photoPick'));
+  f.click('[data-act="cameraShutter"]');
+  await settle();
+  assert.equal(tracks[0].stopped, true);
+  assert.match(f.text(), /We found 3 items/);
+});
+test('camera permission failure keeps the file capture fallback available', async t => {
+  const camera = { getUserMedia: async () => { const error = new Error('denied'); error.name = 'NotAllowedError'; throw error; } };
+  const f = boot({ id: 'alice', camera }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="barcode"]');
+  await settle();
+  assert.match(f.text(), /Camera access was denied/);
+  assert.ok(f.w.document.querySelector('label.shutter[for="barcodeCam"]'));
+  assert.ok(f.w.document.querySelector('#barcodePick'));
+});
 test('real receipt photo is read by the receipt-scan function, reviewed, and saved', async t => {
   const database = [];
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
@@ -252,16 +312,56 @@ test('empty fridge photo shows a friendly error', async t => {
   receiptPhoto(f); await settle();
   assert.match(f.w.document.querySelector('.cam-error').textContent, /didn't spot any food/);
 });
-test('bar code scan (still simulated) inserts the item', async t => {
+test('bar code scan looks up USDA data, opens the editor, and inserts the confirmed item', async t => {
   const database = [];
-  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  const f = boot({ id: 'alice', database, barcodeResult: '016000275287' }); t.after(() => f.dom.window.close()); await tick();
+  let requests = 0;
+  f.w.fetch = async (url, options) => {
+    requests++;
+    assert.match(url, /\/functions\/v1\/barcode-lookup$/);
+    assert.equal(JSON.parse(options.body).barcode, '016000275287');
+    return { ok: true, json: async () => ({ item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy', storage: 'Fridge', source: 'USDA FoodData Central' } }) };
+  };
   f.click('[data-act="tab"][data-arg="scan"]');
   f.click('[data-act="startScan"][data-arg="barcode"]');
-  f.click('[data-act="shutter"]');
-  await new Promise(r => setTimeout(r, 1450));
-  f.click('[data-act="confirmScan"]'); await tick();
+  await tick();
+  assert.equal(requests, 0);
+  assert.ok(f.w.document.querySelector('#barcodeCam'));
+  assert.ok(f.w.document.querySelector('#barcodePick'));
+  barcodePhoto(f);
+  await settle();
+  assert.equal(f.w.document.querySelector('#f_name').value, 'Cheddar Cheese');
+  assert.equal(f.w.document.querySelector('#f_cat').value, 'Dairy');
+  assert.match(f.text(), /USDA FoodData Central/);
+  assert.ok(f.w.document.querySelector('#f_exp').value);
+  assert.equal(f.w.document.querySelector('#saveItemBtn').textContent, 'Save to MyPantry');
+  f.click('#saveItemBtn');
+  await settle();
+  assert.match(f.text(), /Added to MyPantry/);
+  assert.equal(f.w.document.querySelector('[data-act="confirmScan"]'), null);
   assert.equal(database.length, 1);
   assert.equal(database[0].way_added, 'barcode');
+  assert.equal(database[0].ingredient_name, 'Cheddar Cheese');
+  assert.equal(database[0].food_type, 'Dairy');
+});
+test('failed bar code photo offers validated manual UPC lookup', async t => {
+  const f = boot({ id: 'alice', database: [], barcodeResult: '016000275287' }); t.after(() => f.dom.window.close()); await tick();
+  let fail = true;
+  f.w.fetch = async () => fail
+    ? { ok: false, json: async () => ({ error: "We couldn't find this item in USDA FoodData Central." }) }
+    : { ok: true, json: async () => ({ item: { name: 'Manual UPC item', quantity: 1, unit: 'ct', category: 'Other', storage: 'Pantry' } }) };
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="barcode"]');
+  barcodePhoto(f); await settle();
+  assert.ok(f.w.document.querySelector('#barcodeNumberForm'));
+  f.w.document.querySelector('#barcodeNumber').value = '123';
+  f.w.document.querySelector('#barcodeNumberForm').dispatchEvent(new f.w.Event('submit', { bubbles: true, cancelable: true }));
+  assert.equal(f.w.document.querySelector('#barcodeNumberErr').hidden, false);
+  fail = false;
+  f.w.document.querySelector('#barcodeNumber').value = '012345678905';
+  f.w.document.querySelector('#barcodeNumberForm').dispatchEvent(new f.w.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+  assert.equal(f.w.document.querySelector('#f_name').value, 'Manual UPC item');
 });
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();

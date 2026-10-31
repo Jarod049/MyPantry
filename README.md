@@ -67,4 +67,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 
 Receipt photos are read by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
 
+Camera scan screens use a live rear-camera preview when `getUserMedia` is available over HTTPS or localhost. The shutter captures one still frame for analysis; gallery upload and file capture remain available when live preview is unsupported or permission is denied.
+
+UPC/EAN food bar codes are decoded in the browser and looked up through the authenticated `barcode-lookup` Edge Function using USDA FoodData Central first and Open Food Facts as a fallback. Results open in the existing editable item form, and spoil dates use the current category and storage estimates. See [BARCODE_SETUP.md](BARCODE_SETUP.md).
+
 Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.

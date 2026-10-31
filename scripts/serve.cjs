@@ -4,6 +4,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../dist');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const port = Number(process.env.PORT || 4173);
+const host = process.env.HOST || '127.0.0.1';
 http.createServer((req, res) => {
   const file = new URL(req.url, 'http://localhost').pathname;
   const allowed = ['/', '/index.html', '/app.js', '/auth.js', '/styles.css', '/config.js'];
@@ -12,4 +13,4 @@ http.createServer((req, res) => {
     if (error) { res.writeHead(404); res.end('Run npm run build first.'); return; }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'text/html', 'Cache-Control': 'no-store' }); res.end(data);
   });
-}).listen(port, '127.0.0.1', () => console.log(`MyPantry: http://127.0.0.1:${port}`));
+}).listen(port, host, () => console.log(`MyPantry: http://${host}:${port}`));

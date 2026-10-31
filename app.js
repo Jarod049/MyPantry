@@ -58,13 +58,23 @@ const DAY = 864e5;
 const TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
 const pad2 = n => String(n).padStart(2, '0');
 const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const inDays = n => isoOf(new Date(TODAY.getTime() + n * DAY));
+const inDays = n => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return isoOf(d); };
 const parseIso = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const daysLeft = it => Math.round((parseIso(it.exp) - TODAY) / DAY);
 const fmtDate = s => parseIso(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const byExp = (a, b) => a.exp.localeCompare(b.exp) || a.name.localeCompare(b.name);
 let uid = 1;
+function newUuid() {
+  if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto?.getRandomValues === 'function') crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+}
 
 function status(d) {
   if (d < 0) return { cls: 'bad', label: 'Spoiled' };
@@ -388,7 +398,7 @@ async function loadUserAppState() {
   if (hasLocalState) queueUserAppStateWrite();
 }
 function ensureConversationId() {
-  if (!S.conversationId) S.conversationId = crypto.randomUUID();
+  if (!S.conversationId) S.conversationId = newUuid();
   return S.conversationId;
 }
 function historicalChatHtml(html) {
@@ -431,7 +441,7 @@ async function loadChatHistory() {
     if (error) throw error;
     if (!conversation) {
       if (generation === accountGeneration && request === chatLoadRequest && revision === chatRevision) {
-        S.conversationId = crypto.randomUUID(); S.chat = []; render();
+        S.conversationId = newUuid(); S.chat = []; render();
       }
       return;
     }
@@ -547,7 +557,7 @@ async function startAppSessionTracking() {
         if (error) throw error;
       }
       if (generation !== accountGeneration || S.user?.id !== owner || S.auth !== 'app') return;
-      appSessionId = crypto.randomUUID();
+      appSessionId = newUuid();
       appSessionOwner = owner;
       appSessionGeneration = generation;
       try { sessionStorage.setItem(storedKey, appSessionId); } catch (_) {}
@@ -838,6 +848,8 @@ function closeSheet() { const s = $('#scrim'); if (s) s.remove(); }
 let reelCtl = null;
 function render() {
   unmountReels();
+  const wantsCamera = S.auth === 'app' && S.tab === 'scan' && S.scan?.stage === 'camera' && !DEMO;
+  if (!wantsCamera) stopCameraPreview();
   const keepScroll = $('.scroll', app)?.scrollTop || 0;
   const prevKey = app.dataset.key;
   let html = '';
@@ -856,6 +868,7 @@ function afterRender(scrollTop) {
   if (sc && scrollTop) sc.scrollTop = scrollTop;
   if (S.auth === 'app' && S.tab === 'home') { const cs = $('#chatScroll'); if (cs) cs.scrollTop = cs.scrollHeight; }
   if (S.auth === 'app' && S.tab === 'reels') mountReels();
+  attachCameraPreview();
   bindForms();
 }
 
@@ -1229,10 +1242,15 @@ function renderSoon() {
 function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
-  const title = mode === 'new' ? 'Enter item details' : mode === 'review' ? 'Edit detected item' : 'Edit item';
+  const title = mode === 'new' ? 'Enter item details' : mode === 'review' && S.scan?.mode === 'barcode' ? 'Does this look right?' : mode === 'review' ? 'Edit detected item' : 'Edit item';
   const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Change it if it looks wrong.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
+  const lookupNote = mode === 'review' && it.lookupSource
+    ? `<div class="est-note">${ic('tag')}<span>Product information from ${esc(it.lookupSource)}. Check every field before saving.</span></div>` : '';
+  const saveLabel = mode === 'new' ? 'Add to MyPantry'
+    : mode === 'review' && S.scan?.mode === 'barcode' ? 'Save to MyPantry' : 'Save';
   return `<div class="sheet-head"><h2>${title}</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <form class="sheet-body" id="itemForm" novalidate data-mode="${mode}" data-id="${it.id || ''}">
+    ${lookupNote}
     <div class="field"><label for="f_name">Name</label><input class="input" id="f_name" value="${esc(it.name || '')}" placeholder="e.g. Cottage cheese" ${mode === 'new' ? 'autofocus' : ''}><span class="field-err" id="f_nameErr" hidden>Give this item a name.</span></div>
     <div class="row2">
       <div class="field"><label for="f_qty">Quantity</label><input class="input num" id="f_qty" inputmode="decimal" value="${v}"></div>
@@ -1245,7 +1263,7 @@ function itemForm(it, mode) {
     <div class="est-note">${srcNote}</div>
   </form>
   <div class="sheet-foot">
-    <button class="btn btn-primary" data-act="saveItem" id="saveItemBtn">${mode === 'new' ? 'Add to MyPantry' : 'Save'}</button>
+    <button class="btn btn-primary" data-act="saveItem" id="saveItemBtn">${saveLabel}</button>
     ${mode === 'edit' ? `<button class="btn btn-danger-ghost" data-act="deleteItem" data-arg="${it.id}">${ic('trash')} Delete item</button>` : ''}
   </div>`;
 }
@@ -1303,7 +1321,102 @@ const DETECT = {
     { name: 'Creamy peanut butter', emoji: '🥜', cat: 'Other', unit: 'jar', store: 'Pantry', src: 'ai' }
   ]
 };
-function startScan(mode) { S.scan = { mode, stage: mode === 'manual' ? 'menu' : 'camera', demo: 'good', items: [] }; render(); }
+let cameraStream = null;
+let cameraOwner = null;
+let cameraRequest = 0;
+
+function stopCameraPreview() {
+  ++cameraRequest;
+  if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+  cameraStream = null;
+  cameraOwner = null;
+}
+function attachCameraPreview() {
+  if (!cameraStream || cameraOwner !== S.scan || S.scan?.stage !== 'camera') return;
+  const video = $('#cameraFeed');
+  if (!video) return;
+  video.srcObject = cameraStream;
+  video.play?.().catch(() => {});
+  const status = $('.camera-status'); if (status) status.hidden = true;
+  const shutter = $('[data-act="cameraShutter"]'); if (shutter) shutter.disabled = false;
+}
+async function startCameraPreview(sc) {
+  stopCameraPreview();
+  if (!sc || S.scan !== sc || sc.stage !== 'camera') return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    sc.cameraState = 'fallback';
+    sc.cameraError = window.isSecureContext === false
+      ? 'Live preview requires HTTPS. Use the shutter or choose a photo.'
+      : 'Live camera preview is unavailable. Use the shutter or choose a photo.';
+    render();
+    return;
+  }
+  sc.cameraState = 'requesting';
+  const request = ++cameraRequest;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+    if (request !== cameraRequest || S.scan !== sc || sc.stage !== 'camera') {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    cameraStream = stream;
+    cameraOwner = sc;
+    sc.cameraState = 'live';
+    sc.cameraError = null;
+    render();
+  } catch (error) {
+    if (request !== cameraRequest || S.scan !== sc) return;
+    sc.cameraState = 'fallback';
+    sc.cameraError = error?.name === 'NotAllowedError'
+      ? 'Camera access was denied. Allow it in your browser settings, or choose a photo.'
+      : 'The live camera could not start. Use the shutter or choose a photo.';
+    render();
+  }
+}
+function liveCameraScene(sc, fallback) {
+  if (sc.preview) return `<img class="rc-preview" src="${sc.preview}" alt="Your photo">`;
+  if (sc.cameraState === 'fallback') return fallback;
+  return `<video id="cameraFeed" class="camera-feed" autoplay muted playsinline aria-label="Live camera preview"></video>
+    <div class="camera-status" role="status"><div class="spinner"></div>Starting camera…</div>`;
+}
+function cameraShutter(fileInputId) {
+  return S.scan?.cameraState === 'fallback'
+    ? `<label class="shutter" for="${fileInputId}" aria-label="Take photo" role="button"><i></i></label>`
+    : `<button class="shutter" data-act="cameraShutter" aria-label="Take photo" disabled><i></i></button>`;
+}
+async function captureCameraFrame() {
+  const sc = S.scan;
+  const video = $('#cameraFeed');
+  if (!sc || sc.stage !== 'camera' || sc.cameraState !== 'live' || !video || video.readyState < 2) {
+    toast('The camera is still starting. Try again in a moment.', null, 'camera');
+    return;
+  }
+  const sourceWidth = video.videoWidth, sourceHeight = video.videoHeight;
+  if (!sourceWidth || !sourceHeight) return toast('The camera is not ready yet.', null, 'camera');
+  const maxSide = sc.mode === 'barcode' ? 3200 : 2400;
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return toast("Couldn't capture that frame. Choose a photo instead.", null, 'alert');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .9));
+  if (!blob || S.scan !== sc) return toast("Couldn't capture that frame. Try again.", null, 'alert');
+  const file = new File([blob], `${sc.mode}-${Date.now()}.jpg`, { type: 'image/jpeg' });
+  stopCameraPreview();
+  if (sc.mode === 'barcode') await scanBarcodePhoto(file);
+  else await scanPhoto(file);
+}
+function startScan(mode) {
+  stopCameraPreview();
+  S.scan = { mode, stage: mode === 'manual' ? 'menu' : 'camera', demo: 'good', items: [], cameraState: mode === 'manual' ? null : 'requesting' };
+  render();
+  if (mode !== 'manual' && !DEMO) void startCameraPreview(S.scan);
+}
 function renderScan() {
   const sc = S.scan;
   if (!sc || sc.stage === 'menu') return scanMenu();
@@ -1324,9 +1437,10 @@ function scanMenu() {
     <div class="tip"><b>Tip:</b> Photos work best in good light with labels facing the camera. We read best-by dates when we can see them and estimate the rest.</div>
   </div>`;
 }
-// Receipt and fridge/pantry photos are read for real when connected to Supabase;
-// demo mode (and bar codes) keep the simulation.
+// Receipt and fridge/pantry photos and bar codes are read for real when connected
+// to Supabase. Explicit demo mode keeps the simulation.
 const realPhoto = sc => !DEMO && (sc.mode === 'receipt' || sc.mode === 'pantry');
+const realBarcode = sc => !DEMO && sc.mode === 'barcode';
 const PHOTO_TEXT = {
   receipt: { title: 'Photo of receipt', head: 'Snap your grocery receipt', tip: 'Lay it flat in good light. Long receipts can be folded so the food lines fit in one photo.', busy: 'Reading your receipt…', bad: "We couldn't read this receipt. Lay it flat in good light and try again.", none: "We didn't find any food on this receipt." },
   pantry: { title: 'Photo of pantry or fridge', head: 'Snap your fridge, freezer or shelf', tip: 'Open the door wide, use good light and turn labels toward the camera. One shelf at a time works best.', busy: 'Finding your food…', bad: "We couldn't see your food clearly. Try again in better light.", none: "We didn't spot any food in this photo. Try a closer shot of one shelf." }
@@ -1334,6 +1448,7 @@ const PHOTO_TEXT = {
 function renderCamera() {
   const sc = S.scan;
   if (realPhoto(sc)) return renderPhotoCamera(sc);
+  if (realBarcode(sc)) return renderBarcodeCamera(sc);
   const titles = { pantry: 'Photo of pantry or fridge', receipt: 'Photo of receipt', barcode: 'Scan bar code' };
   const hints = { pantry: 'Fit your shelves in the frame, then tap the button.', receipt: 'Lay the receipt flat and fit it in the frame.', barcode: 'Line up the bar code inside the frame.' };
   let scene = '';
@@ -1357,19 +1472,39 @@ function renderCamera() {
     ${sc.stage === 'error' ? `<div class="cam-error" role="alert"><div class="eh">${ic('alert')}<b>${errMsg}</b></div><div class="btns">${errBtns}</div></div>` : ''}
   </div>`;
 }
+function renderBarcodeCamera(sc) {
+  const busy = sc.stage === 'analyzing';
+  const fallback = `<div class="rc-empty">${ic('barcode')}<b>Photograph the bar code</b><span>Fill the frame with one clear UPC or EAN code.</span></div>`;
+  const scene = liveCameraScene(sc, fallback);
+  const hint = sc.cameraError || (sc.cameraState === 'live'
+    ? 'Line up one bar code, then tap the shutter.'
+    : 'Starting the rear camera. You can also choose a photo.');
+  return `<div class="camera" role="dialog" aria-label="Scan bar code">
+    <div class="cam-top"><button class="close" data-act="scanCancel" aria-label="Close camera">${ic('x')}</button><b>Scan bar code</b><span style="width:34px"></span></div>
+    <div class="viewfinder">${scene}<div class="vf-corners"><i></i><i></i><i></i><i></i></div>
+      ${busy ? `<div class="analyzing"><div class="spinner"></div>Looking up this item…</div>` : ''}</div>
+    <div class="cam-hint">${esc(hint)}</div>
+    <input type="file" id="barcodeCam" accept="image/*" capture="environment" hidden>
+    <input type="file" id="barcodePick" accept="image/*" hidden>
+    <div class="cam-bottom"><label class="cam-side" for="barcodePick" aria-label="Choose a photo" title="Choose a photo">${ic('image')}</label>${cameraShutter('barcodeCam')}<button class="cam-side" data-act="manual" aria-label="Type it instead">${ic('pencil')}</button></div>
+    ${sc.stage === 'error' ? `<div class="cam-error" role="alert"><div class="eh">${ic('alert')}<b>${esc(sc.error || "We couldn't find this item.")}</b></div>
+      <form id="barcodeNumberForm" class="barcode-number" novalidate><label for="barcodeNumber">Or enter the digits below the bar code</label><div><input id="barcodeNumber" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="UPC or EAN"><button class="btn btn-primary" type="submit">Look up</button></div><span id="barcodeNumberErr" hidden>Enter a valid 8–14 digit UPC or EAN.</span></form>
+      <div class="btns"><button class="btn btn-ghost" data-act="retake">${ic('barcode')} Try another photo</button><button class="btn btn-ghost" data-act="manual">Enter item details</button></div></div>` : ''}
+  </div>`;
+}
 function renderPhotoCamera(sc) {
   const t = PHOTO_TEXT[sc.mode];
-  const scene = sc.preview
-    ? `<img class="rc-preview" src="${sc.preview}" alt="Your photo">`
-    : `<div class="rc-empty">${ic(sc.mode === 'receipt' ? 'receipt' : 'fridge')}<b>${t.head}</b><span>${t.tip}</span></div>`;
+  const fallback = `<div class="rc-empty">${ic(sc.mode === 'receipt' ? 'receipt' : 'fridge')}<b>${t.head}</b><span>${t.tip}</span></div>`;
+  const scene = liveCameraScene(sc, fallback);
+  const hint = sc.cameraError || (sc.cameraState === 'live' ? t.tip : 'Starting the rear camera. You can also choose a photo.');
   return `<div class="camera" role="dialog" aria-label="${t.title}">
     <div class="cam-top"><button class="close" data-act="scanCancel" aria-label="Close camera">${ic('x')}</button><b>${t.title}</b><span style="width:34px"></span></div>
     <div class="viewfinder">${scene}<div class="vf-corners"><i></i><i></i><i></i><i></i></div>
       ${sc.stage === 'analyzing' ? `<div class="analyzing"><div class="spinner"></div>${t.busy}</div>` : ''}</div>
-    <div class="cam-hint">Take a photo, or choose one you already took.</div>
+    <div class="cam-hint">${esc(hint)}</div>
     <input type="file" id="photoCam" accept="image/*" capture="environment" hidden>
     <input type="file" id="photoPick" accept="image/*" hidden>
-    <div class="cam-bottom"><label class="cam-side" for="photoPick" aria-label="Choose a photo" title="Choose a photo">${ic('image')}</label><label class="shutter" for="photoCam" aria-label="Take photo" role="button"><i></i></label><button class="cam-side" data-act="manual" aria-label="Type it instead">${ic('pencil')}</button></div>
+    <div class="cam-bottom"><label class="cam-side" for="photoPick" aria-label="Choose a photo" title="Choose a photo">${ic('image')}</label>${cameraShutter('photoCam')}<button class="cam-side" data-act="manual" aria-label="Type it instead">${ic('pencil')}</button></div>
     ${sc.stage === 'error' ? `<div class="cam-error" role="alert"><div class="eh">${ic('alert')}<b>${esc(sc.error || t.bad)}</b></div><div class="btns"><button class="btn btn-primary" data-act="retake">${ic('camera')} Try another photo</button><button class="btn btn-ghost" data-act="manual">Enter it myself</button></div></div>` : ''}
   </div>`;
 }
@@ -1442,6 +1577,182 @@ async function scanPhoto(file) {
     fail(error.name === 'AbortError' ? 'Reading the photo took too long. Please try again.' : error.message);
   } finally { clearTimeout(timer); }
 }
+function barcodeFileData(file) {
+  if (file.type && !/^image\/(jpeg|png|webp|gif|heic|heif)$/.test(file.type)) return Promise.reject(new Error('Please use a bar code photo.'));
+  if (file.size > 15000000) return Promise.reject(new Error('That photo is too large. Please use one under 15 MB.'));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Couldn't open that photo. Please try another."));
+    reader.readAsDataURL(file);
+  });
+}
+function loadBarcodeImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Couldn't open that bar code photo."));
+    image.src = url;
+  });
+}
+function validBarcode(value) {
+  if (!/^\d{8,14}$/.test(value)) return false;
+  const digits = [...value].map(Number), check = digits.pop();
+  const sum = digits.reverse().reduce((total, digit, index) => total + digit * (index % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+const barcodeText = result => {
+  const value = typeof result?.getText === 'function' ? result.getText() : result?.rawValue || result?.text;
+  const digits = String(value || '').replace(/\D/g, '');
+  return validBarcode(digits) ? digits : null;
+};
+async function nativeBarcodeDetector() {
+  if (!window.BarcodeDetector) return null;
+  try {
+    const wanted = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+    const supported = typeof window.BarcodeDetector.getSupportedFormats === 'function'
+      ? await window.BarcodeDetector.getSupportedFormats() : wanted;
+    const formats = wanted.filter(format => supported.includes(format));
+    return formats.length ? new window.BarcodeDetector({ formats }) : null;
+  } catch (_) { return null; }
+}
+async function decodeBarcodeSource(source, nativeDetector, zxing, isUrl = false) {
+  if (nativeDetector) {
+    try {
+      const found = await nativeDetector.detect(source);
+      for (const result of found || []) { const value = barcodeText(result); if (value) return value; }
+    } catch (_) { /* try ZXing */ }
+  }
+  try {
+    const result = isUrl ? await zxing.decodeFromImageUrl(source) : zxing.decodeFromCanvas(source);
+    return barcodeText(result);
+  } catch (_) { return null; }
+}
+function barcodeVariant(image, crop, rotation, treatment) {
+  const sourceWidth = image.naturalWidth || image.width, sourceHeight = image.naturalHeight || image.height;
+  const sw = Math.max(1, Math.round(sourceWidth * crop)), sh = Math.max(1, Math.round(sourceHeight * crop));
+  const sx = Math.round((sourceWidth - sw) / 2), sy = Math.round((sourceHeight - sh) / 2);
+  const maxSide = 3200, scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
+  const sideways = rotation === 90 || rotation === 270;
+  const canvas = document.createElement('canvas');
+  canvas.width = sideways ? dh : dw; canvas.height = sideways ? dw : dh;
+  const ctx = canvas.getContext('2d', { willReadFrequently: treatment !== 'color' });
+  if (!ctx) return canvas;
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.translate(canvas.width / 2, canvas.height / 2); ctx.rotate(rotation * Math.PI / 180);
+  ctx.drawImage(image, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (treatment !== 'color') {
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height), data = pixels.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let gray = Math.round(data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114);
+      if (treatment === 'contrast') gray = Math.max(0, Math.min(255, Math.round((gray - 128) * 1.8 + 128)));
+      else gray = gray >= Number(treatment.slice(1)) ? 255 : 0;
+      data[i] = data[i + 1] = data[i + 2] = gray;
+    }
+    ctx.putImageData(pixels, 0, 0);
+  }
+  return canvas;
+}
+async function decodeBarcodeImage(url) {
+  if (!window.ZXingBrowser?.BrowserMultiFormatOneDReader) throw new Error('The bar code scanner did not load. Check your connection and try again.');
+  const zxing = new window.ZXingBrowser.BrowserMultiFormatOneDReader();
+  // Keep the simple path first. It was the most reliable path before enhanced
+  // processing was added, and a successful image should not pay for any filters.
+  let value = await decodeBarcodeSource(url, null, zxing, true);
+  if (value) return value;
+  const nativeDetector = await nativeBarcodeDetector();
+  let image;
+  try { image = await loadBarcodeImage(url); } catch (_) { return null; }
+  if (nativeDetector) {
+    try {
+      const found = await nativeDetector.detect(image);
+      for (const result of found || []) { value = barcodeText(result); if (value) return value; }
+    } catch (_) { /* continue with enhanced canvases */ }
+  }
+  const attempts = [
+    [.85, 0, 'color'], [.65, 0, 'color'], [1, 90, 'color'], [1, 270, 'color'], [1, 180, 'color'],
+    [.8, 90, 'color'], [.8, 270, 'color'], [1, 0, 'contrast'], [.8, 0, 'contrast'],
+    [1, 90, 'contrast'], [1, 270, 'contrast'], [.8, 0, 't110'], [.8, 0, 't150'], [.8, 0, 't190']
+  ];
+  for (const [crop, rotation, treatment] of attempts) {
+    value = await decodeBarcodeSource(barcodeVariant(image, crop, rotation, treatment), nativeDetector, zxing);
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  return null;
+}
+async function scanBarcodePhoto(file) {
+  const sc = S.scan;
+  if (!file || !realBarcode(sc) || sc.stage === 'analyzing') return;
+  const generation = accountGeneration;
+  const current = () => S.scan === sc && generation === accountGeneration;
+  const fail = message => { if (!current()) return; sc.stage = 'error'; sc.error = message; render(); };
+  sc.stage = 'analyzing'; sc.error = null; render();
+  let image;
+  try { image = await barcodeFileData(file); } catch (error) { fail(error.message); return; }
+  if (!current()) return;
+  sc.preview = image; render();
+  try {
+    let barcode = await decodeBarcodeImage(image);
+    // Some phone photo formats do not load directly into an HTML image even
+    // though createImageBitmap can decode them. Reuse the former, known-good
+    // JPEG normalization path before giving up.
+    if (!barcode) {
+      let normalized = null;
+      try { normalized = await photoImage(file); } catch (_) {}
+      if (normalized && normalized !== image && current()) {
+        sc.preview = normalized; render();
+        barcode = await decodeBarcodeImage(normalized);
+      }
+    }
+    if (!current()) return;
+    if (!barcode) throw new Error("We couldn't read a bar code in that photo. Try a closer, sharper picture.");
+    await lookupBarcode(barcode, sc);
+  } catch (error) {
+    fail(error.message && !/NotFoundException/i.test(error.name || '')
+      ? error.message
+      : "We couldn't read a bar code in that photo. Try a closer, sharper picture.");
+  }
+}
+async function lookupBarcode(rawBarcode, sc) {
+  if (S.scan !== sc || !['camera', 'analyzing', 'error'].includes(sc.stage)) return;
+  const barcode = String(rawBarcode || '').replace(/\D/g, '');
+  sc.stage = 'analyzing'; sc.error = null; sc.barcode = barcode; render();
+  const generation = accountGeneration;
+  const current = () => S.scan === sc && generation === accountGeneration;
+  const fail = message => { if (!current()) return; sc.stage = 'error'; sc.error = message; render(); };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error || !data.session?.access_token) throw new Error('Please sign in again to scan bar codes.');
+    const response = await fetch(`${CFG.supabaseUrl}/functions/v1/barcode-lookup`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseKey, Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({ barcode })
+    });
+    let result = {};
+    try { result = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(result.error || 'Bar code lookup is unavailable. Try again.');
+    if (!current()) return;
+    const item = result.item || {};
+    const cat = CATS.includes(item.category) ? item.category : 'Other';
+    const store = ['Fridge', 'Pantry', 'Freezer'].includes(item.storage) ? item.storage : 'Pantry';
+    const unit = UNITS_US.includes(item.unit) ? item.unit : 'ct';
+    const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+    const name = String(item.name || '').trim().slice(0, 60);
+    const lookupSource = item.source === 'Open Food Facts' ? 'Open Food Facts' : 'USDA FoodData Central';
+    if (!name) throw new Error('The product database returned this bar code without a product name.');
+    const detected = { tid: 't' + (uid++), name, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
+      src: 'ai', exp: estimate(cat, store), on: true, barcode, lookupSource };
+    sc.items = [detected]; sc.stage = 'review'; render();
+    openItemForm({ ...detected, id: detected.tid }, 'review');
+  } catch (error) {
+    fail(error.name === 'AbortError' ? 'The USDA lookup took too long. Try again.' : error.message);
+  } finally { clearTimeout(timer); }
+}
 function buildDetected(mode) {
   return DETECT[mode].map(d => ({
     tid: 't' + (uid++), name: d.name, emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
@@ -1456,7 +1767,7 @@ function renderReview() {
   const now = new Date();
   return `<div class="appbar" style="padding-bottom:4px"><button class="back" data-act="scanCancel">${ic('left')} Cancel</button></div>
   <div class="scroll">
-    <div class="review-h"><h1>We found ${plural(sc.items.length, 'item')}</h1><p>From ${srcLine} · ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. Check each one before saving.</p></div>
+    <div class="review-h"><h1>${sc.mode === 'barcode' ? 'Does this look right?' : `We found ${plural(sc.items.length, 'item')}`}</h1><p>From ${srcLine} · ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. Check each field before saving.</p></div>
     <div class="pad" style="display:grid;gap:10px">${sc.items.map(reviewCard).join('')}</div>
     <div class="pad" style="padding-top:12px"><button class="btn btn-ghost" data-act="manualInReview">${ic('plus')} Add something we missed</button></div>
     <div style="height:20px"></div>
@@ -1469,11 +1780,11 @@ function reviewCard(i) {
   const tmp = { exp: i.exp };
   const d = daysLeft(tmp);
   return `<div class="rv ${i.on ? '' : 'off'}" data-tid="${i.tid}">
-    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
+    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.lookupSource ? ` · ${esc(i.lookupSource)}` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${u === 'ct' ? 'count' : u}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
-      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : 'AI estimate'}</span></div>
+      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : i.barcode ? 'Estimated from category' : 'AI estimate'}</span></div>
     </div>
     <div class="rv-bottom"><span class="hint">Stored in</span><div class="store-sel">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button class="${s === i.store ? 'on' : ''}" data-act="reviewStore" data-arg="${i.tid}|${s}">${s}</button>`).join('')}</div></div>
     ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Remove it if this is the same one.</span></div>` : ''}` : ''}
@@ -1725,10 +2036,10 @@ const ACT = {
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
   goSoon() { S.tab = 'ing'; S.ingView = 'soon'; render(); },
   askFromSoon() { S.tab = 'home'; render(); ask("What's going bad?"); },
-  newChat() { resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; render(); },
+  newChat() { resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; render(); },
   async chatClear() {
     if (!await doReset()) return;
-    resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; render();
+    resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; render();
     pushMsg('bot', '<p>Done. I cleared your inventory and reset your Reels. Tap Scan whenever you want to log food again.</p>'); refreshBadge();
   },
   chatCancel(_, b) { b.closest('.actions').remove(); pushMsg('bot', '<p>No problem. Your food is still there.</p>'); },
@@ -1761,6 +2072,13 @@ const ACT = {
       const r = S.scan.items.find(x => x.tid === id);
       Object.assign(r, data, { emoji: r.emoji || data.emoji, src: $('#f_exp').value && $('#f_exp').value !== r.exp ? 'label' : r.src });
       if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store);
+      if (S.scan.mode === 'barcode') {
+        if (!await saveNewItems([r], 'barcode')) return;
+        closeSheet();
+        S.scan = { mode: 'barcode', stage: 'done', added: [r] };
+        S.tab = 'scan'; render();
+        return;
+      }
       closeSheet(); render();
     } else if (mode === 'reviewNew') {
       S.scan.items.push({ tid: 't' + (uid++), ...data, on: true }); closeSheet(); render();
@@ -1781,13 +2099,19 @@ const ACT = {
   closeSheet() { closeSheet(); },
 
   startScan(mode) { closeSheet(); if (S.tab !== 'scan') S.tab = 'scan'; startScan(mode); },
-  manual() { closeSheet(); if (S.scan && S.scan.stage !== 'review') S.scan = null; S.tab = 'scan'; render(); openItemForm({ store: 'Fridge', cat: 'Other' }, 'new'); },
+  manual() { stopCameraPreview(); closeSheet(); if (S.scan && S.scan.stage !== 'review') S.scan = null; S.tab = 'scan'; render(); openItemForm({ store: 'Fridge', cat: 'Other' }, 'new'); },
   manualInReview() { openItemForm({ store: 'Fridge', cat: 'Other', qty: 1, unit: 'ct' }, 'reviewNew'); },
   demo(arg) { S.scan.demo = arg; if (S.scan.stage === 'error') S.scan.stage = 'camera'; render(); },
-  retake() { Object.assign(S.scan, { stage: 'camera', demo: 'good', preview: null, error: null }); render(); },
-  scanCancel() { S.scan = null; render(); },
+  retake() {
+    stopCameraPreview();
+    Object.assign(S.scan, { stage: 'camera', demo: 'good', preview: null, error: null, cameraState: DEMO ? null : 'requesting' });
+    render();
+    if (!DEMO) void startCameraPreview(S.scan);
+  },
+  scanCancel() { stopCameraPreview(); S.scan = null; render(); },
+  cameraShutter() { void captureCameraFrame(); },
   shutter() {
-    const sc = S.scan; if (sc.stage === 'analyzing' || realPhoto(sc)) return;
+    const sc = S.scan; if (sc.stage === 'analyzing' || realPhoto(sc) || realBarcode(sc)) return;
     sc.stage = 'analyzing'; render();
     setTimeout(() => {
       if (!S.scan || S.scan !== sc) return;
@@ -1883,7 +2207,7 @@ const ACT = {
   deals() { S.setPage = 'deals'; render(); },
   dealsBack() { S.setPage = null; render(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
-  async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = crypto.randomUUID(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
+  async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
   async changePw(_, button) {
     if (!auth) return toast('Password reset is unavailable in the demo.', null, 'alert');
     button.disabled = true;
@@ -1972,7 +2296,8 @@ phone.addEventListener('click', e => {
 });
 phone.addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'photoCam' || t.id === 'photoPick') { void scanPhoto(t.files && t.files[0]); return; }
+  if (t.id === 'photoCam' || t.id === 'photoPick') { stopCameraPreview(); void scanPhoto(t.files && t.files[0]); return; }
+  if (t.id === 'barcodeCam' || t.id === 'barcodePick') { stopCameraPreview(); void scanBarcodePhoto(t.files && t.files[0]); return; }
   if (t.id === 'sw_metric') { S.metric = t.checked; persist(); render(); toast(S.metric ? 'Showing metric units' : 'Showing US units', null, 'ruler'); }
   if (t.id === 'sw_rem') { S.reminders = t.checked; persist(); render(); }
   if (t.id === 'sw_face') { S.faceId = t.checked; toast(t.checked ? 'Face ID turned on' : 'Face ID turned off', null, 'face'); }
@@ -1993,6 +2318,15 @@ function bindForms() {
     const error = form.querySelector(selector); if (!error) return;
     error.hidden = false; error.querySelector('span').textContent = message;
   };
+  const bf = $('#barcodeNumberForm');
+  if (bf) bf.addEventListener('submit', e => {
+    e.preventDefault();
+    const input = $('#barcodeNumber'), error = $('#barcodeNumberErr');
+    const barcode = input.value.replace(/\D/g, '');
+    const valid = validBarcode(barcode);
+    input.classList.toggle('bad', !valid); error.hidden = valid;
+    if (valid) void lookupBarcode(barcode, S.scan);
+  });
   const lf = $('#loginForm');
   if (lf) lf.addEventListener('submit', async e => {
     e.preventDefault();
