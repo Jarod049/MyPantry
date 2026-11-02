@@ -40,21 +40,21 @@ Requires Node.js 22 or later.
 4. Run `npm start` and open `http://127.0.0.1:4173`.
 5. Run `npm test` for the session and app regression tests.
 
-For an isolated classroom prototype, set `DEMO_MODE=true` in `.env`. This mode uses the displayed demo credentials, persists its demo session across reloads, and never connects to Supabase. Demo signup and email sending are unavailable. Use Restart prototype to clear demo state.
+The demo uses a real Supabase Auth account. Set `DEMO_ACCOUNT_ID` to that account's Auth UUID to reveal Demo tools after it signs in. Never put the Demo password in `.env` or frontend code.
 
 Use an HTTP server locally, rather than opening `index.html` as a file. `npm run build` generates `dist/config.js` and copies the website files into `dist/`.
 
 ## 5. Authentication
 
-Connected mode uses Supabase Auth for sign-in, signup, email confirmation, password recovery, session restoration, and logout. Sessions persist on the same browser until sign-out or server-side expiry/revocation. Browser storage restrictions may prevent persistence. Demo bypasses are disabled in connected mode.
+Connected mode uses Supabase Auth for sign-in, signup, email confirmation, password recovery, session restoration, and logout. Sessions persist on the same browser until sign-out or server-side expiry/revocation. Browser storage restrictions may prevent persistence. There is no sign-in bypass. The configured Demo account receives pantry reset/seed tools and simulated scan outcomes after normal authentication.
 
 Navigation and unfinished scans remain browser-local. Demo data stays separate from real accounts.
 
-Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, ZIP code, and assistant conversations to Supabase. Apply the new migration in `supabase/migrations/20261026_sync_account_state.sql` before deploying this frontend. The migration adds owner-scoped tables and leaves legacy pantry and assistant rows untouched. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
+Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, ZIP code, and assistant conversations to Supabase. Apply the account-state migrations and `supabase/migrations/20261101_pantry_delete.sql` before deploying this frontend. The delete migration is required by inventory reset and Demo pantry tools. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
 
 ## 6. Deploy
 
-The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; keep that existing setup. It uploads the HTML, CSS, app.js, auth.js, and generated config.js. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values; `netlify.toml` builds and publishes `dist`. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
+The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. It uploads the HTML, CSS, app.js, auth.js, and generated config.js. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
 
 ## 7. Verify
 

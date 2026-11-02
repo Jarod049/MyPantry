@@ -1,7 +1,7 @@
 # Receipt and fridge photo scanning
 
 In connected mode, **Scan → Take a picture of your receipt** now reads a real
-photo. Demo mode (`DEMO_MODE=true`) keeps the simulated Smith's receipt.
+photo. The authenticated Demo account configured by `DEMO_ACCOUNT_ID` uses simulated receipt outcomes instead.
 
 ## How it works
 

@@ -58,6 +58,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       const filters = {};
       const builder = {
         insert(rows) { action = 'insert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, insert: rowsToWrite }); return this; },
+        delete() { action = 'delete'; queries.push({ table, delete: true }); return this; },
         upsert(rows) { action = 'upsert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, upsert: rowsToWrite }); return this; },
         update(rows) { action = 'update'; rowsToWrite = rows; queries.push({ table, update: rows }); return this; },
         select() { return this; },
@@ -89,6 +90,12 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
             const updated = target.filter(row => Object.entries(filters).every(([key, value]) => row[key] === value));
             updated.forEach(row => Object.assign(row, rowsToWrite));
             return { data: updated, error: null };
+          }
+          if (action === 'delete') {
+            const target = table === 'pantry_item' ? (database || []) : (mockTables[table] || []);
+            const deleted = target.filter(row => Object.entries(filters).every(([key, value]) => row[key] === value));
+            deleted.forEach(row => target.splice(target.indexOf(row), 1));
+            return { data: deleted, error: null };
           }
           let result = table === 'pantry_item'
             ? (load ? await load() : { data: (database || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null })
@@ -445,14 +452,35 @@ test('bad credentials display an error without entering the pantry', async t => 
   f.form('#loginForm', { li_email: 'alice@example.test', li_pw: 'bad' }); await tick();
   assert.match(f.text(), /Invalid login credentials/); assert.equal(f.queries.length, 0);
 });
-test('connected mode blocks prototype bypasses', async t => {
-  const f = boot(); t.after(() => f.dom.window.close()); await tick();
-  f.click('[data-tool="skip"]'); assert.match(f.text(), /Sign in/); assert.equal(f.queries.length, 0);
-  assert.equal(f.w.document.querySelector('.tools').hidden, true);
+test('ordinary connected accounts cannot see demo tools', async t => {
+  const f = boot({ id: 'bob', config: { demoAccountId: 'alice' } }); t.after(() => f.dom.window.close()); await tick();
+  assert.match(f.text(), /Pantry Pal/);
+  assert.equal(f.w.document.querySelector('#demoPanel').hidden, true);
+  assert.equal(f.w.document.querySelector('#demoToggle').hidden, true);
 });
 test('missing configuration cannot silently enable demo access', async t => {
   const f = boot({ config: { supabaseUrl: '' } }); t.after(() => f.dom.window.close()); await tick();
-  assert.match(f.text(), /Sign-in is unavailable/); f.click('[data-tool="skip"]'); assert.doesNotMatch(f.text(), /Pantry Pal/);
+  assert.match(f.text(), /Sign-in is unavailable/); assert.equal(f.w.document.querySelector('#demoPanel').hidden, true);
+});
+test('configured Supabase demo account receives tools and simulated scans', async t => {
+  const database = [
+    { ingredient_id: 1, auth_user_id: 'alice', ingredient_name: 'Milk', quantity: 1, measurement: 'gal', food_type: 'Dairy', expiration_date: '2030-01-01' },
+    { ingredient_id: 2, auth_user_id: 'alice', ingredient_name: 'Eggs', quantity: 12, measurement: 'ct', food_type: 'Dairy', expiration_date: '2030-01-02' },
+    { ingredient_id: 3, auth_user_id: 'alice', ingredient_name: 'Bread', quantity: 1, measurement: 'loaf', food_type: 'Grains & Bread', expiration_date: '2030-01-03' }
+  ];
+  const f = boot({ id: 'alice', database, config: { demoAccountId: 'alice' } });
+  t.after(() => f.dom.window.close()); await tick();
+  assert.equal(f.w.document.querySelector('#demoPanel').hidden, false);
+  assert.doesNotMatch(f.w.document.body.textContent, /MyPantry test guide/);
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="pantry"]');
+  assert.match(f.w.document.querySelector('#app').textContent, /Clear photo/);
+  assert.match(f.w.document.querySelector('#app').textContent, /Blurry photo/);
+  f.click('[data-act="scanCancel"]');
+  f.click('[data-tool="random"]'); await tick(); await tick();
+  assert.ok(database.length >= 8 && database.length <= 18);
+  assert.ok(database.every(row => row.auth_user_id === 'alice'));
+  assert.equal(f.queries.filter(query => query.table === 'pantry_item' && query.delete).length, 1);
 });
 test('recovery event opens the real password form and keeps it through refresh', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();

@@ -1,6 +1,6 @@
 # Pantry Pal AI chat
 
-The connected homepage calls the `pantry-chat` Supabase Edge Function. Demo mode keeps the scripted prototype. The AI reads the signed-in user's pantry and supports the last ten conversation messages. It cannot change inventory. Starting a new chat or changing accounts clears conversation context.
+The connected homepage calls the `pantry-chat` Supabase Edge Function. The AI reads the signed-in user's pantry and supports the last ten conversation messages. It cannot change inventory. Starting a new chat or changing accounts clears conversation context.
 
 Backend setup:
 1. Apply `supabase/chat_quota.sql` once (already applied to MyPantry).

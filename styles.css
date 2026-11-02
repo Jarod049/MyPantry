@@ -77,7 +77,7 @@ button { cursor: pointer; }
 h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: -.01em; }
 .num { font-variant-numeric: tabular-nums; }
 
-/* ---------- Stage: tester guide + device ---------- */
+/* ---------- Stage: demo tools + device ---------- */
 .stage {
   min-height: 100%;
   display: flex;
@@ -86,7 +86,7 @@ h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-
   align-items: flex-start;
   padding: 32px 24px;
 }
-.guide {
+.demo-panel {
   width: 400px;
   max-width: 100%;
   position: sticky;
@@ -98,48 +98,19 @@ h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-
   border-radius: var(--r-lg);
   padding: 22px 22px 18px;
 }
-.guide-brand { display: flex; align-items: center; gap: 10px; }
-.guide-brand .logo { width: 34px; height: 34px; }
-.guide h1 { font-size: 22px; }
-.guide .eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
-.guide p { color: var(--ink-2); margin: 8px 0 0; font-size: 14px; }
-.guide h2 { font-size: 15px; margin: 22px 0 8px; }
-.persona {
-  display: flex; gap: 12px; align-items: flex-start;
-  background: var(--surface-2); border-radius: var(--r-md); padding: 12px; margin-top: 14px;
-}
-.persona .av {
-  width: 40px; height: 40px; flex: none; border-radius: 50%;
-  background: var(--butter-soft); color: var(--butter); display: grid; place-items: center;
-  font-family: var(--display); font-weight: 700;
-}
-.persona b { display: block; font-size: 14px; }
-.persona span { font-size: 13px; color: var(--ink-2); }
-.cred {
-  display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 13px;
-  background: var(--basil-soft); color: var(--basil-ink); padding: 10px 12px; border-radius: var(--r-sm);
-}
-.cred code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; user-select: all; }
-.tasks { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; counter-reset: t; }
-.tasks li {
-  display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start;
-  padding: 10px; border-radius: var(--r-sm); border: 1px solid var(--line);
-}
-.tasks li.done { background: var(--surface-2); }
-.tasks li.done .t-title { text-decoration: line-through; color: var(--ink-3); }
-.tasks input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--basil); }
-.t-title { font-weight: 600; font-size: 14px; }
-.t-body { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
-.t-req { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.t-req span { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--ink-2); }
-.debrief { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 13.5px; display: grid; gap: 4px; }
+.demo-panel-brand { display: flex; align-items: center; gap: 10px; }
+.demo-panel-brand .logo { width: 34px; height: 34px; }
+.demo-panel h1 { font-size: 22px; }
+.demo-panel .eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+.demo-panel p { color: var(--ink-2); margin: 8px 0 16px; font-size: 14px; }
 .tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .tools button {
   border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px;
   padding: 6px 12px; font-size: 13px; font-weight: 500;
 }
 .tools button:hover { border-color: var(--basil); }
-.guide-foot { font-size: 12px; color: var(--ink-3); margin-top: 18px; }
+.tools button:disabled { cursor: wait; opacity: .55; }
+.demo-panel-foot { font-size: 12px!important; color: var(--ink-3)!important; margin-top: 16px!important; }
 
 .device-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .device {
@@ -175,11 +146,11 @@ h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-
 .statusbar svg { width: 17px; height: 12px; }
 .phone.dark-chrome .statusbar { color: #fff; }
 
-.guide-toggle { display: none; }
+.demo-toggle-button { display: none; }
 
 @media (max-width: 900px) {
   .stage { flex-direction: column; align-items: center; padding: 20px 16px; }
-  .guide { position: static; max-height: none; order: 2; width: 392px; }
+  .demo-panel { position: static; max-height: none; order: 2; width: 392px; }
 }
 @media (max-width: 520px) {
   .stage { padding: 0; gap: 0; }
@@ -188,8 +159,8 @@ h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-
   .phone { border-radius: 0; }
   .statusbar { display: none; }
   .device-note { display: none; }
-  .guide { position: fixed; inset: 0; z-index: 100; border-radius: 0; width: 100%; max-height: none; padding: 20px 16px 40px; }
-  .guide-toggle {
+  .demo-panel { position: fixed; inset: 0; z-index: 100; border-radius: 0; width: 100%; max-height: none; padding: 20px 16px 40px; }
+  .demo-toggle-button {
     display: flex; position: fixed; z-index: 101; right: 12px; bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
     background: var(--ink); color: var(--surface); border: 0; border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
     box-shadow: var(--shadow);
@@ -690,7 +661,7 @@ button.set-row:hover { background: var(--surface-2); }
 .reels-top { padding-top: 12px; }
 .camera { z-index: 45; }
 @media (max-width: 520px) {
-  .guide:not(.open) { display: none; }
+  .demo-panel:not(.open) { display: none; }
   .cam-top { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
 }
 .reel-dish { top: 25%; font-size: 104px; }

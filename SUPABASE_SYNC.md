@@ -20,7 +20,7 @@ the account data currently used by the app.
 - Existing account-specific browser settings are copied to Supabase once, only
   when that account has no `user_app_state` row yet.
 
-Navigation, unfinished scans, and demo-mode data remain browser-local. The
+Navigation and unfinished scans remain browser-local. The
 legacy `ai_message` table and existing pantry rows are not modified by the new
 migration.
 
@@ -33,10 +33,14 @@ migration.
    `chat_messages`, and enables owner-scoped row-level security on each table.
 3. Review and apply `supabase/migrations/20261026_app_session_tracking.sql` in
    the Supabase SQL Editor. It creates the owner-scoped `app_sessions` table.
-4. Deploy the matching frontend through the existing Pages workflow. It uses
+4. Review and apply `supabase/migrations/20261101_pantry_delete.sql` in the
+   Supabase SQL Editor. It grants authenticated accounts permission to delete
+   only their own pantry rows. Reset, empty, recipe consumption, and Demo pantry
+   tools require this policy.
+5. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-5. In a preview build, sign in and check that pantry edits, deletion, recipe
+6. In a preview build, sign in and check that pantry edits, deletion, recipe
    consumption, recipe activity, settings, and chat messages remain after a
    reload. Check two accounts to confirm they cannot see each other's records.
 
