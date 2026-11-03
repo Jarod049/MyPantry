@@ -318,7 +318,7 @@ function hydrate() {
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
       if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
-      if (nav.setPage === 'deals') S.setPage = 'deals';
+      if (['deals', 'username', 'password'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
   try {
@@ -1930,7 +1930,21 @@ const DEALS = [
 ];
 const price = p => (p * (STORE_MULT[S.store] || 1)).toFixed(2);
 function sw(id, on, label) { return `<span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''} aria-label="${label}"><span></span></span>`; }
+function renderAccountSettings(kind) {
+  const username = kind === 'username';
+  return `<div class="appbar"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
+  <div class="scroll"><form class="auth" id="${username ? 'usernameForm' : 'passwordForm'}" novalidate>
+    <h1>${username ? 'Change username' : 'Change password'}</h1>
+    <p>${username ? 'This is the name shown in MyPantry. You will still sign in with your email.' : 'Use at least 8 characters and one symbol, such as ! or #.'}</p>
+    <div class="err" id="accountErr" role="alert" hidden><span></span></div>
+    ${username ? `<div class="field"><label for="accountName">Username</label><input class="input" id="accountName" type="text" autocomplete="nickname" maxlength="40" value="${esc(S.user?.name || '')}" required><span class="hint">1–40 characters</span></div>` : `<div class="field"><label for="accountPassword">New password</label><input class="input" id="accountPassword" type="password" autocomplete="new-password" minlength="8" required></div>
+    <div class="field"><label for="accountConfirm">Confirm new password</label><input class="input" id="accountConfirm" type="password" autocomplete="new-password" minlength="8" required></div>`}
+    <button class="btn btn-primary" type="submit">${username ? 'Save username' : 'Save password'}</button>
+    <button class="btn btn-ghost" type="button" data-act="dealsBack">Cancel</button>
+  </form></div>`;
+}
 function renderSettings() {
+  if (['username', 'password'].includes(S.setPage)) return renderAccountSettings(S.setPage);
   const u = S.user || { name: 'User', email: '' };
   const row = (icon, tint, color, title, small, right, act, arg) => `<${act ? `button class="set-row" data-act="${act}" ${arg ? `data-arg="${arg}"` : ''}` : 'div class="set-row"'}><span class="si" style="background:${tint};color:${color}">${ic(icon)}</span><span><b>${title}</b>${small ? `<small>${small}</small>` : ''}</span>${right}</${act ? 'button' : 'div'}>`;
   const chev = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">${P.right}</svg>`;
@@ -1951,7 +1965,8 @@ function renderSettings() {
       ${row('refresh', 'var(--tomato-soft)', 'var(--tomato)', '<span style="color:var(--tomato)">Reset inventory</span>', 'Remove all food and reset Reels', chev, 'resetAsk')}
     </div></div>
     <div class="set-group"><span class="lbl">Account</span><div class="set-card">
-      ${row('mail', 'var(--surface-3)', 'var(--ink-2)', 'Change password', null, chev, 'changePw')}
+      ${row('pencil', 'var(--surface-3)', 'var(--ink-2)', 'Change username', null, chev, 'changeUsername')}
+      ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Change password', null, chev, 'changePw')}
       ${row('logout', 'var(--surface-3)', 'var(--ink-2)', 'Log out', null, '', 'logout')}
     </div></div>
     <div class="version">MyPantry version 1.0</div>
@@ -2216,13 +2231,8 @@ const ACT = {
   dealsBack() { S.setPage = null; render(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
   async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
-  async changePw(_, button) {
-    if (!auth) return toast('Password reset is unavailable. Check the app configuration.', null, 'alert');
-    button.disabled = true;
-    try { await auth.resetPassword(S.user.email, redirectTo); toast('Check your email for a password reset link.', null, 'mail'); }
-    catch (error) { toast(esc(error.message), null, 'alert'); }
-    finally { button.disabled = false; }
-  },
+  changeUsername() { S.setPage = 'username'; render(); },
+  changePw() { S.setPage = 'password'; render(); },
   async logout(_, button) {
     if (button) button.disabled = true;
     let endedSession = false;
@@ -2320,6 +2330,34 @@ function bindForms() {
     const error = form.querySelector(selector); if (!error) return;
     error.hidden = false; error.querySelector('span').textContent = message;
   };
+  const accountForm = $('#usernameForm') || $('#passwordForm');
+  if (accountForm) accountForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const button = accountForm.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    const username = accountForm.id === 'usernameForm';
+    const value = username ? $('#accountName').value.trim() : $('#accountPassword').value;
+    accountForm.querySelector('#accountErr').hidden = true;
+    if (username && (!value || value.length > 40)) return showError(accountForm, '#accountErr', 'Enter a username between 1 and 40 characters.');
+    if (!username && (value.length < 8 || !/[^A-Za-z0-9\s]/.test(value))) return showError(accountForm, '#accountErr', 'Use at least 8 characters and one symbol.');
+    if (!username && value !== $('#accountConfirm').value) return showError(accountForm, '#accountErr', 'The passwords do not match.');
+    const generation = accountGeneration, owner = S.user?.id;
+    button.disabled = true;
+    try {
+      if (!auth || isDemoAccount()) throw new Error('Account changes require your own signed-in account.');
+      if (username) await auth.updateName(value);
+      else await auth.updatePassword(value);
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      if (username) { S.user.name = value; persist(); }
+      if (accountForm.isConnected) { S.setPage = null; render(); }
+      toast(username ? 'Username updated.' : 'Password updated. Use your new password next time you sign in.');
+    } catch (error) {
+      if (generation === accountGeneration && owner === S.user?.id && accountForm.isConnected) showError(accountForm, '#accountErr', error.message);
+    } finally {
+      if (!username) accountForm.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+      button.disabled = false;
+    }
+  });
   const bf = $('#barcodeNumberForm');
   if (bf) bf.addEventListener('submit', e => {
     e.preventDefault();
@@ -2466,3 +2504,4 @@ clock(); setInterval(clock, 30000);
 S.inv = []; S.auth = auth ? 'loading' : 'login'; render();
 if (auth) auth.start();
 })();
+

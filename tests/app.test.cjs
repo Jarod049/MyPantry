@@ -6,12 +6,13 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {} } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
   const w = dom.window;
   let listener, saved = id ? { user: user(id), access_token: 'test-session' } : null;
+  if (saved) saved.user.user_metadata = { ...saved.user.user_metadata, ...metadata };
   const queries = [];
   const mockTables = Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
   w.matchMedia = () => ({ matches: false });
@@ -51,7 +52,15 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
         return { data: { session: saved } };
       },
       async signOut() { saved = null; listener('SIGNED_OUT', null); return {}; },
-      async signUp() { return { data: { session: null } }; }
+      async signUp() { return { data: { session: null } }; },
+      async updateUser(input) {
+        queries.push({ authUpdate: input });
+        if (accountUpdate) { const result = await accountUpdate(input); if (result?.error) return result; }
+        if (!saved) return { error: new Error('Signed out') };
+        saved = { ...saved, user: { ...saved.user, user_metadata: { ...saved.user.user_metadata, ...input.data } } };
+        listener('USER_UPDATED', saved);
+        return { data: { user: saved.user } };
+      }
     },
     from(table) {
       let action = null, rowsToWrite = null, single = false, limitCount = null;
@@ -519,4 +528,41 @@ test('signup requires eight characters and preserves symbol validation', async t
   update('Abc123!'); assert.equal(f.w.document.querySelector('#suBtn').disabled,true);
   update('Abc123!x'); assert.equal(f.w.document.querySelector('#suBtn').disabled,false);
   update('Abc123xx'); assert.equal(f.w.document.querySelector('#suBtn').disabled,true);
+});
+
+
+test('username is saved through Supabase Auth and restored from account metadata', async t => {
+ const f=boot({id:'alice'});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeUsername"]');
+ f.form('#usernameForm',{accountName:'Jared'});await tick();
+ assert.deepEqual(JSON.parse(JSON.stringify(f.queries.find(q=>q.authUpdate).authUpdate)),{data:{name:'Jared'}});
+ assert.match(f.text(),/Jared/);assert.match(f.text(),/Settings/);
+ const reloaded=boot({id:'alice',metadata:{name:'Jared'}});t.after(()=>reloaded.dom.window.close());await tick();
+ reloaded.click('[data-act="tab"][data-arg="settings"]');assert.match(reloaded.text(),/Jared/);
+});
+test('password form validates and updates Auth without writing pantry data',async t=>{
+ const f=boot({id:'alice'});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changePw"]');
+ f.form('#passwordForm',{accountPassword:'Abc123!',accountConfirm:'Abc123!'});await tick();
+ assert.match(f.text(),/at least 8/);assert.equal(f.queries.filter(q=>q.authUpdate).length,0);
+ f.form('#passwordForm',{accountPassword:'Abc123!x',accountConfirm:'different'});await tick();
+ assert.match(f.text(),/do not match/);
+ f.form('#passwordForm',{accountPassword:'Abc123!x',accountConfirm:'Abc123!x'});await tick();
+ assert.equal(f.queries.filter(q=>q.authUpdate).length,1);
+ assert.equal(f.queries.find(q=>q.authUpdate).authUpdate.password,'Abc123!x');
+ assert.match(f.text(),/Settings/);assert.equal(f.w.document.querySelector('#accountPassword'),null);
+});
+test('failed account update keeps the form and displays the Supabase error',async t=>{
+ const f=boot({id:'alice',accountUpdate:async()=>({error:new Error('Network unavailable')})});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeUsername"]');
+ f.form('#usernameForm',{accountName:'New name'});await tick();
+ assert.match(f.text(),/Network unavailable/);assert.equal(f.w.document.querySelector('#accountName').value,'New name');
+ assert.equal(f.w.document.querySelector('#usernameForm button[type="submit"]').disabled,false);
+});
+test('account update finishing after sign-out cannot change the next account',async t=>{
+ let finish;const pending=new Promise(resolve=>finish=resolve);
+ const f=boot({id:'alice',accountUpdate:()=>pending});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeUsername"]');
+ f.form('#usernameForm',{accountName:'Alice new name'});await tick();f.emit('SIGNED_OUT',null);await tick();
+ finish({});await tick();assert.match(f.text(),/Sign in/);assert.doesNotMatch(f.text(),/Alice new name|Username updated/);
 });
