@@ -883,7 +883,7 @@ function renderAuth() {
     <div class="auth-hero">${LOGO}<h1>Know what's in your kitchen.</h1><p>Sign in to see what you have, what's going bad, and what to cook tonight.</p></div>
     <div class="err" id="loginErr" ${configError || S.authError ? '' : 'hidden'}>${ic('alert')}<span>${esc(configError || S.authError || '')}</span></div>
     <div class="field"><label for="li_email">Email</label><input class="input" id="li_email" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(S.lastEmail || '')}"></div>
-    <div class="field"><label for="li_pw">Password</label><div class="pw-wrap"><input class="input" id="li_pw" type="password" autocomplete="current-password" placeholder="Your password"><button type="button" data-act="showpw" data-arg="li_pw">Show</button></div></div>
+    <div class="field"><label for="li_pw">Password</label><div class="pw-wrap"><input class="input" id="li_pw" aria-describedby="li_pw_hint" type="password" autocomplete="current-password" placeholder="Your password"><button type="button" data-act="showpw" data-arg="li_pw">Show</button></div><span class="hint" id="li_pw_hint">New passwords require at least 8 characters and one symbol (e.g., ! or #).</span></div>
     <div style="display:flex;justify-content:space-between;align-items:center">
       <span class="hint">You stay signed in until you sign out</span>
       <button type="button" class="link" data-act="auth" data-arg="forgot">Forgot password?</button>
@@ -908,7 +908,7 @@ function renderAuth() {
     <div class="err" id="suErr" hidden>${ic('alert')}<span></span></div>
     <div class="field"><label for="su_name">First name</label><input class="input" id="su_name" type="text" autocomplete="given-name" placeholder="Karen"></div>
     <div class="field"><label for="su_email">Email</label><input class="input" id="su_email" type="email" autocomplete="email" placeholder="you@example.com"><span class="field-err" id="su_emailErr" hidden>Enter a valid email, like name@example.com.</span></div>
-    <div class="field"><label for="su_pw">Password</label><div class="pw-wrap"><input class="input" id="su_pw" type="password" autocomplete="new-password" placeholder="Create a password"><button type="button" data-act="showpw" data-arg="su_pw">Show</button></div></div>
+    <div class="field"><label for="su_pw">Password</label><div class="pw-wrap"><input class="input" id="su_pw" aria-describedby="su_pw_hint" type="password" autocomplete="new-password" placeholder="Create a password"><button type="button" data-act="showpw" data-arg="su_pw">Show</button></div><span class="hint" id="su_pw_hint">Use at least 8 characters and one symbol (e.g., ! or #).</span></div>
     <div class="field"><label for="su_pw2">Confirm password</label><input class="input" id="su_pw2" type="password" autocomplete="new-password" placeholder="Type it again"></div>
     <ul class="pw-rules" id="pwRules">
       <li data-rule="len">At least 8 characters</li>
