@@ -508,3 +508,15 @@ test('AI response arriving after account switch is discarded',async t=>{
  finish({ok:true,json:async()=>({answer:'ALICE PRIVATE ANSWER'})});await tick();
  assert.doesNotMatch(f.text(),/ALICE PRIVATE ANSWER/);
 });
+
+test('signup requires eight characters and preserves symbol validation', async t => {
+  const f = boot(); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="auth"][data-arg="signup"]');
+  const update = password => {
+    for (const [id,value] of Object.entries({su_email:'test@example.test',su_pw:password,su_pw2:password})) f.w.document.getElementById(id).value=value;
+    f.w.document.querySelector('#signupForm').dispatchEvent(new f.w.Event('input',{bubbles:true}));
+  };
+  update('Abc123!'); assert.equal(f.w.document.querySelector('#suBtn').disabled,true);
+  update('Abc123!x'); assert.equal(f.w.document.querySelector('#suBtn').disabled,false);
+  update('Abc123xx'); assert.equal(f.w.document.querySelector('#suBtn').disabled,true);
+});

@@ -872,9 +872,9 @@ function renderAuth() {
   const a = S.auth;
   if (a === 'loading') return '<div class="scroll"><div class="auth" role="status">Checking your sign-in…</div></div>';
   if (a === 'recovery') return `<div class="scroll"><form class="auth" id="recoveryForm">
-    <h1>Choose a new password</h1><p>Use at least 14 characters and a symbol.</p>
+    <h1>Choose a new password</h1><p>Use at least 8 characters and a symbol.</p>
     <div class="err" id="recoveryErr" hidden><span></span></div>
-    <div class="field"><label for="new_pw">New password</label><input class="input" id="new_pw" type="password" autocomplete="new-password" required minlength="14"></div>
+    <div class="field"><label for="new_pw">New password</label><input class="input" id="new_pw" type="password" autocomplete="new-password" required minlength="8"></div>
     <div class="field"><label for="new_pw2">Confirm password</label><input class="input" id="new_pw2" type="password" autocomplete="new-password" required></div>
     <button class="btn btn-primary" type="submit">Save password</button>
     <button class="btn btn-ghost" type="button" data-act="logout">Cancel and sign out</button>
@@ -911,7 +911,7 @@ function renderAuth() {
     <div class="field"><label for="su_pw">Password</label><div class="pw-wrap"><input class="input" id="su_pw" type="password" autocomplete="new-password" placeholder="Create a password"><button type="button" data-act="showpw" data-arg="su_pw">Show</button></div></div>
     <div class="field"><label for="su_pw2">Confirm password</label><input class="input" id="su_pw2" type="password" autocomplete="new-password" placeholder="Type it again"></div>
     <ul class="pw-rules" id="pwRules">
-      <li data-rule="len">At least 14 characters</li>
+      <li data-rule="len">At least 8 characters</li>
       <li data-rule="sym">Includes a symbol, like ! # $ or %</li>
       <li data-rule="match">Both passwords match</li>
     </ul>
@@ -2364,8 +2364,8 @@ function bindForms() {
     e.preventDefault();
     const password = $('#new_pw').value, confirmation = $('#new_pw2').value;
     const btn = rf.querySelector('[type="submit"]'); if (btn.disabled) return;
-    if (password.length < 14 || !/[^A-Za-z0-9\s]/.test(password) || password !== confirmation)
-      return showError(rf, '#recoveryErr', 'Use at least 14 characters, a symbol, and matching passwords.');
+    if (password.length < 8 || !/[^A-Za-z0-9\s]/.test(password) || password !== confirmation)
+      return showError(rf, '#recoveryErr', 'Use at least 8 characters, a symbol, and matching passwords.');
     btn.disabled = true;
     try { await auth.updatePassword(password); toast('Password updated.'); }
     catch (error) { showError(rf, '#recoveryErr', error.message); }
@@ -2375,7 +2375,7 @@ function bindForms() {
   if (sf) {
     const upd = () => {
       const pw = $('#su_pw').value, pw2 = $('#su_pw2').value, em = $('#su_email').value.trim();
-      const rules = { len: pw.length >= 14, sym: /[^A-Za-z0-9\s]/.test(pw), match: pw.length > 0 && pw === pw2 };
+      const rules = { len: pw.length >= 8, sym: /[^A-Za-z0-9\s]/.test(pw), match: pw.length > 0 && pw === pw2 };
       $$('#pwRules li').forEach(li => li.classList.toggle('met', rules[li.dataset.rule]));
       const emOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em);
       $('#su_emailErr').hidden = !em || emOk;
