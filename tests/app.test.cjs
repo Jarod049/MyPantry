@@ -139,7 +139,7 @@ test('manual ingredient is confirmed in database, then reload restores it and it
   reloaded.click('[data-act="tab"][data-arg="ing"]');
   assert.match(reloaded.text(), /Persistence test apples/);
   assert.match(reloaded.text(), /Pantry/);
-  assert.match(reloaded.text(), /Saved in database/);
+  assert.doesNotMatch(reloaded.text(), /Saved in database/);
   const bob = boot({ id: 'bob', database }); t.after(() => bob.dom.window.close()); await tick();
   bob.click('[data-act="tab"][data-arg="ing"]');
   assert.doesNotMatch(bob.text(), /Persistence test apples/);

@@ -1192,6 +1192,7 @@ function renderIng() {
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
 function syncChip() {
+  if (sync === 'synced') return '';
   const m = { loading: ['Loading…', 'soon'], saving: ['Saving…', 'soon'], synced: ['Saved in database', 'fresh'], error: ['Save/load failed', 'now'], offline: ['Offline demo', 'soon'] }[sync];
   return `<span class="pill ${m[1]}" id="syncChip" title="${sb ? 'Pantry is stored in Supabase' : 'No Supabase config found; changes stay in this browser'}">${m[0]}</span>`;
 }
