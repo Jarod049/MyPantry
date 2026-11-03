@@ -92,7 +92,7 @@ test('looks up an exact normalized GTIN and maps it to existing pantry fields', 
   assert.equal(b.calls[1].options.headers['X-Api-Key'], 'usda-key');
   assert.deepEqual(await response.json(), {
     barcode: '016000275287',
-    item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy', storage: 'Fridge', source: 'USDA FoodData Central' }
+    item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' }
   });
 });
 
@@ -193,4 +193,16 @@ test('cleans repeated USDA names, parses mixed fractions, and prioritizes snacks
     storage: 'Pantry',
     source: 'USDA FoodData Central'
   });
+});
+
+test('barcode lookup separates food categories from freezer storage', async()=>{
+ for(const [description,category,storage] of [
+  ['Frozen strawberries','Fruits','Freezer'],['Frozen peas','Vegetables','Freezer'],
+  ['Frozen waffles','Grains & Bread','Freezer'],['Eggs','Dairy & Eggs','Fridge'],
+  ['Pasta sauce','Sauces & Condiments','Pantry'],['All-purpose flour','Spices & Baking','Pantry'],
+  ['Flour tortillas','Grains & Bread','Pantry'],['Frozen pizza','Prepared Meals','Freezer']]){
+  const b=boot({foods:[{gtinUpc:'0016000275287',description,packageWeight:'1 oz'}]});
+  const body=await(await b.request('016000275287')).json();
+  assert.equal(body.item.category,category,description);assert.equal(body.item.storage,storage,description);
+ }
 });

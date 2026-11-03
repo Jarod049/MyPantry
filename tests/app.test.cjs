@@ -300,7 +300,7 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
   const calls = [];
   f.w.fetch = async (url, options) => { calls.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ readable: true, store_name: null, items: [
-    { name: 'Greek yogurt', category: 'Dairy', quantity: 32, unit: 'oz', storage: 'Fridge', label_date: '2030-02-14' },
+    { name: 'Greek yogurt', category: 'Dairy & Eggs', quantity: 32, unit: 'oz', storage: 'Fridge', label_date: '2030-02-14' },
     { name: 'Apples', category: 'Produce', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
     { name: 'Frozen peas', category: 'Frozen', quantity: 1, unit: 'bag', storage: 'Freezer', label_date: '2030-03-01' }
   ] }) }; };
@@ -336,7 +336,7 @@ test('bar code scan looks up USDA data, opens the editor, and inserts the confir
     requests++;
     assert.match(url, /\/functions\/v1\/barcode-lookup$/);
     assert.equal(JSON.parse(options.body).barcode, '016000275287');
-    return { ok: true, json: async () => ({ item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy', storage: 'Fridge', source: 'USDA FoodData Central' } }) };
+    return { ok: true, json: async () => ({ item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' } }) };
   };
   f.click('[data-act="tab"][data-arg="scan"]');
   f.click('[data-act="startScan"][data-arg="barcode"]');
@@ -347,7 +347,7 @@ test('bar code scan looks up USDA data, opens the editor, and inserts the confir
   barcodePhoto(f);
   await settle();
   assert.equal(f.w.document.querySelector('#f_name').value, 'Cheddar Cheese');
-  assert.equal(f.w.document.querySelector('#f_cat').value, 'Dairy');
+  assert.equal(f.w.document.querySelector('#f_cat').value, 'Dairy & Eggs');
   assert.match(f.text(), /USDA FoodData Central/);
   assert.ok(f.w.document.querySelector('#f_exp').value);
   assert.equal(f.w.document.querySelector('#saveItemBtn').textContent, 'Save to MyPantry');
@@ -358,7 +358,7 @@ test('bar code scan looks up USDA data, opens the editor, and inserts the confir
   assert.equal(database.length, 1);
   assert.equal(database[0].way_added, 'barcode');
   assert.equal(database[0].ingredient_name, 'Cheddar Cheese');
-  assert.equal(database[0].food_type, 'Dairy');
+  assert.equal(database[0].food_type, 'Dairy & Eggs');
 });
 test('failed bar code photo offers validated manual UPC lookup', async t => {
   const f = boot({ id: 'alice', database: [], barcodeResult: '016000275287' }); t.after(() => f.dom.window.close()); await tick();
@@ -427,7 +427,7 @@ test('reload restores the selected tab and settings subpage', async t => {
   assert.equal(reloaded.w.document.querySelector('#app').dataset.key, 'appsettingsdeals');
 });
 test('navigation restores independently from preferences and stays account-specific', async t => {
-  const navigation = { 'mp_state_v2:alice:navigation': { tab: 'ing', ingView: 'soon', ingCat: 'Dairy' } };
+  const navigation = { 'mp_state_v2:alice:navigation': { tab: 'ing', ingView: 'soon', ingCat: 'Dairy & Eggs' } };
   const alice = boot({ id: 'alice', navigation }); t.after(() => alice.dom.window.close()); await tick();
   assert.equal(alice.w.document.querySelector('#app').dataset.key, 'apping');
   const bob = boot({ id: 'bob', navigation }); t.after(() => bob.dom.window.close()); await tick();
@@ -473,8 +473,8 @@ test('missing configuration cannot silently enable demo access', async t => {
 });
 test('configured Supabase demo account receives tools and simulated scans', async t => {
   const database = [
-    { ingredient_id: 1, auth_user_id: 'alice', ingredient_name: 'Milk', quantity: 1, measurement: 'gal', food_type: 'Dairy', expiration_date: '2030-01-01' },
-    { ingredient_id: 2, auth_user_id: 'alice', ingredient_name: 'Eggs', quantity: 12, measurement: 'ct', food_type: 'Dairy', expiration_date: '2030-01-02' },
+    { ingredient_id: 1, auth_user_id: 'alice', ingredient_name: 'Milk', quantity: 1, measurement: 'gal', food_type: 'Dairy & Eggs', expiration_date: '2030-01-01' },
+    { ingredient_id: 2, auth_user_id: 'alice', ingredient_name: 'Eggs', quantity: 12, measurement: 'ct', food_type: 'Dairy & Eggs', expiration_date: '2030-01-02' },
     { ingredient_id: 3, auth_user_id: 'alice', ingredient_name: 'Bread', quantity: 1, measurement: 'loaf', food_type: 'Grains & Bread', expiration_date: '2030-01-03' }
   ];
   const f = boot({ id: 'alice', database, config: { demoAccountId: 'alice' } });
@@ -594,4 +594,21 @@ test('failed email change displays Supabase error and retains the old email',asy
  f.form('#emailForm',{accountEmail:'new@example.test',accountEmailConfirm:'new@example.test'});await tick();
  assert.match(f.text(),/Email rate limit exceeded/);assert.match(f.text(),/alice@example.test/);
  assert.equal(f.w.document.querySelector('#emailForm button[type="submit"]').disabled,false);
+});
+
+test('legacy produce and frozen items load under new food categories with storage preserved',async t=>{
+ const database=[['Apple','Produce','Pantry'],['Baby carrots','Produce','Fridge'],['Frozen peas','Frozen','Freezer']].map(([ingredient_name,food_type,storage_location],i)=>({ingredient_id:i+1,ingredient_name,food_type,storage_location,auth_user_id:'alice',quantity:1,measurement:'ct',expiration_date:'2030-01-01'}));
+ const f=boot({id:'alice',database});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="ing"]');
+ f.click('[data-act="ingCat"][data-arg="Fruits"]');assert.match(f.text(),/Apple/);assert.doesNotMatch(f.text(),/Baby carrots/);
+ f.click('[data-act="ingCat"][data-arg="Vegetables"]');assert.match(f.text(),/Baby carrots/);assert.match(f.text(),/Frozen peas/);assert.match(f.text(),/Freezer/);
+});
+test('manual form offers and persists the selected eleven food categories',async t=>{
+ const database=[];const f=boot({id:'alice',database});t.after(()=>f.dom.window.close());await tick();
+ enterIngredient(f,'Test condiment');await tick();
+ f.click('[data-act="tab"][data-arg="scan"]');f.click('[data-act="manual"]');
+ const options=[...f.w.document.querySelector('#f_cat').options].map(o=>o.value);
+ assert.deepEqual(options,['Fruits','Vegetables','Meat & Seafood','Dairy & Eggs','Grains & Bread','Snacks','Sauces & Condiments','Spices & Baking','Prepared Meals','Drinks','Other']);
+ for(const [id,value] of Object.entries({f_name:'Soy sauce',f_qty:'1',f_unit:'ct',f_cat:'Sauces & Condiments',f_exp:'2030-01-01'}))f.w.document.getElementById(id).value=value;
+ f.click('#saveItemBtn');await tick();assert.equal(database.at(-1).food_type,'Sauces & Condiments');
 });

@@ -105,19 +105,44 @@ function fromDisp(q, u) { if (REV[u]) { const [bu, f] = REV[u]; return [q / f, b
 function qtyText(q, u) { const [v, uu] = disp(q, u); return uu === 'ct' ? `${v} count` : `${v} ${uu}`; }
 
 /* ---------- Shelf-life model (category × storage) ---------- */
-const CATS = ['Produce', 'Meat & Seafood', 'Dairy', 'Grains & Bread', 'Snacks', 'Drinks', 'Frozen', 'Other'];
+const CATS = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dairy & Eggs', 'Grains & Bread', 'Snacks', 'Sauces & Condiments', 'Spices & Baking', 'Prepared Meals', 'Drinks', 'Other'];
+function foodCategory(name) {
+  const text = name.toLowerCase();
+  if (/\bflour tortillas?\b/.test(text)) return 'Grains & Bread';
+  if (/\b(beverages?|drinks?|juice|soda|water|coffee|tea|punch|lemonade)\b/.test(text)) return 'Drinks';
+  if (/\b(candy|candies|chocolates?|cookies?|crackers?|chips?|popcorn|pretzels?|granola)\b/.test(text)) return 'Snacks';
+  if (/\b(sauce|salsa|ketchup|mustard|mayonnaise|dressing|vinegar|condiment|soy sauce|cooking oil|olive oil|peanut butter|jam|jelly|syrup|honey)\b/.test(text)) return 'Sauces & Condiments';
+  if (/\b(flour|sugar|salt|pepper|cinnamon|paprika|cumin|spice|seasoning|baking powder|baking soda|yeast|vanilla|cornstarch)\b/.test(text)) return 'Spices & Baking';
+  if (/\b(soup|pizza|lasagna|prepared meal|ready meal|leftovers?|pot pie|burrito|dinner|meal kit)\b/.test(text)) return 'Prepared Meals';
+  if (/\b(snack|pretzel|candy|cookies?|crackers?|chips?|popcorn|nuts?|chocolates?|granola)\b/.test(text)) return 'Snacks';
+  if (/\b(beverage|drinks?|juice|soda|water|coffee|tea|punch|energy drink|lemonade|oat milk|almond milk|soy milk|coconut milk)\b/.test(text)) return 'Drinks';
+  if (/\b(milk|cheese|yogurt|yoghurt|cream|butter|dairy|eggs?|cheddar|parmesan)\b/.test(text)) return 'Dairy & Eggs';
+  if (/\b(meat|beef|pork|chicken|turkey|poultry|seafood|fish|shrimp|sausage|bacon|salmon|tuna)\b/.test(text)) return 'Meat & Seafood';
+  if (/\b(bread|bakery|cereal|grains?|pasta|rice|tortillas?|bagels?|waffles?|oats?|noodles?|spaghetti)\b/.test(text)) return 'Grains & Bread';
+  if (/\b(vegetables?|lettuce|carrots?|potatoes|potato|onions?|broccoli|garlic|spinach|peas?|corn|tomatoes|tomato|peppers?|cabbage|celery|cucumber|zucchini|mushrooms?)\b/.test(text)) return 'Vegetables';
+  if (/\b(fruits?|apples?|bananas?|strawberries|strawberry|raspberries|raspberry|blueberries|blueberry|berries|oranges?|peaches|peach|pears?|grapes?|lemons?|limes?|mango|mangoes|pineapple|melon|avocados?)\b/.test(text)) return 'Fruits';
+  return 'Other';
+}
+function normalizeCategory(name, category) {
+  if (category === 'Dairy') return 'Dairy & Eggs';
+  if (CATS.includes(category)) return category;
+  return foodCategory(name);
+}
 const SHELF = {
-  'Produce': { Fridge: 7, Pantry: 5, Freezer: 240 },
+  'Fruits': { Fridge: 7, Pantry: 5, Freezer: 240 },
+  'Vegetables': { Fridge: 7, Pantry: 5, Freezer: 240 },
   'Meat & Seafood': { Fridge: 3, Pantry: 0, Freezer: 180 },
-  'Dairy': { Fridge: 10, Pantry: 0, Freezer: 90 },
+  'Dairy & Eggs': { Fridge: 10, Pantry: 0, Freezer: 90 },
   'Grains & Bread': { Fridge: 12, Pantry: 6, Freezer: 90 },
   'Snacks': { Fridge: 60, Pantry: 60, Freezer: 120 },
+  'Sauces & Condiments': { Fridge: 60, Pantry: 180, Freezer: 180 },
+  'Spices & Baking': { Fridge: 60, Pantry: 180, Freezer: 180 },
+  'Prepared Meals': { Fridge: 3, Pantry: 0, Freezer: 90 },
   'Drinks': { Fridge: 10, Pantry: 180, Freezer: 180 },
-  'Frozen': { Fridge: 3, Pantry: 0, Freezer: 120 },
   'Other': { Fridge: 60, Pantry: 180, Freezer: 180 }
 };
 const estimate = (cat, store) => inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
-const CAT_TINT = { 'Produce': '#e4f3e0', 'Meat & Seafood': '#fbe3de', 'Dairy': '#e6eef9', 'Grains & Bread': '#f7ecd6', 'Snacks': '#f4e6f3', 'Drinks': '#e0f2f4', 'Frozen': '#e3ecf7', 'Other': '#eceee9' };
+const CAT_TINT = { 'Fruits': '#fbe3de', 'Vegetables': '#e4f3e0', 'Meat & Seafood': '#fbe3de', 'Dairy & Eggs': '#e6eef9', 'Grains & Bread': '#f7ecd6', 'Snacks': '#f4e6f3', 'Sauces & Condiments': '#fae9d9', 'Spices & Baking': '#f7ecd6', 'Prepared Meals': '#e9e3f7', 'Drinks': '#e0f2f4', 'Other': '#eceee9' };
 const EMOJI = { apple: '🍎', banana: '🍌', strawberr: '🍓', broccoli: '🥦', lettuce: '🥬', garlic: '🧄', onion: '🧅', carrot: '🥕', tomato: '🍅', potato: '🥔', avocado: '🥑', lemon: '🍋', grape: '🍇', chicken: '🍗', beef: '🥩', steak: '🥩', salmon: '🐟', fish: '🐟', shrimp: '🍤', bacon: '🥓', milk: '🥛', egg: '🥚', cheese: '🧀', cheddar: '🧀', parmesan: '🧀', yogurt: '🍶', butter: '🧈', bread: '🍞', bagel: '🥯', tortilla: '🫓', rice: '🍚', spaghetti: '🍝', pasta: '🍝', flour: '🌾', cereal: '🥣', granola: '🥣', chip: '🍿', cookie: '🍪', cracker: '🍘', juice: '🧃', soda: '🥤', coffee: '☕', water: '💧', pea: '🫛', 'ice cream': '🍨', pizza: '🍕', waffle: '🧇', soy: '🥢', salsa: '🌶️', sauce: '🥫', soup: '🥫', peanut: '🥜', honey: '🍯', cream: '🥛', corn: '🌽' };
 function guessEmoji(name) { const n = name.toLowerCase(); for (const k in EMOJI) if (n.includes(k)) return EMOJI[k]; return null; }
 const imgHtml = (it, cls = 'img') => it.emoji
@@ -130,34 +155,34 @@ function mk(name, emoji, cat, qty, unit, d, store, src) {
 }
 function samplePantry() {
   return [
-    mk('Strawberries', '🍓', 'Produce', 1, 'lb', 1, 'Fridge', 'ai'),
-    mk('Bananas', '🍌', 'Produce', 6, 'ct', 2, 'Pantry', 'ai'),
-    mk('Broccoli', '🥦', 'Produce', 1, 'head', 4, 'Fridge', 'ai'),
-    mk('Romaine lettuce', '🥬', 'Produce', 1, 'head', 6, 'Fridge', 'ai'),
-    mk('Yellow onion', '🧅', 'Produce', 3, 'ct', 21, 'Pantry', 'ai'),
-    mk('Garlic', '🧄', 'Produce', 1, 'bulb', 25, 'Pantry', 'ai'),
+    mk('Strawberries', '🍓', 'Fruits', 1, 'lb', 1, 'Fridge', 'ai'),
+    mk('Bananas', '🍌', 'Fruits', 6, 'ct', 2, 'Pantry', 'ai'),
+    mk('Broccoli', '🥦', 'Vegetables', 1, 'head', 4, 'Fridge', 'ai'),
+    mk('Romaine lettuce', '🥬', 'Vegetables', 1, 'head', 6, 'Fridge', 'ai'),
+    mk('Yellow onion', '🧅', 'Vegetables', 3, 'ct', 21, 'Pantry', 'ai'),
+    mk('Garlic', '🧄', 'Vegetables', 1, 'bulb', 25, 'Pantry', 'ai'),
     mk('Chicken breast', '🍗', 'Meat & Seafood', 2, 'lb', 2, 'Fridge', 'label'),
     mk('Ground beef', '🥩', 'Meat & Seafood', 1, 'lb', 5, 'Fridge', 'label'),
-    mk('Milk (2%)', '🥛', 'Dairy', 1, 'gal', 3, 'Fridge', 'label'),
-    mk('Milk (2%)', '🥛', 'Dairy', 1, 'gal', 11, 'Fridge', 'label'),
-    mk('Greek yogurt', '🍶', 'Dairy', 32, 'oz', -1, 'Fridge', 'label'),
-    mk('Eggs', '🥚', 'Dairy', 12, 'ct', 16, 'Fridge', 'label'),
-    mk('Cheddar cheese', '🧀', 'Dairy', 8, 'oz', 24, 'Fridge', 'label'),
-    mk('Butter', '🧈', 'Dairy', 1, 'lb', 40, 'Fridge', 'label'),
-    mk('Parmesan', '🧀', 'Dairy', 5, 'oz', 45, 'Fridge', 'label'),
+    mk('Milk (2%)', '🥛', 'Dairy & Eggs', 1, 'gal', 3, 'Fridge', 'label'),
+    mk('Milk (2%)', '🥛', 'Dairy & Eggs', 1, 'gal', 11, 'Fridge', 'label'),
+    mk('Greek yogurt', '🍶', 'Dairy & Eggs', 32, 'oz', -1, 'Fridge', 'label'),
+    mk('Eggs', '🥚', 'Dairy & Eggs', 12, 'ct', 16, 'Fridge', 'label'),
+    mk('Cheddar cheese', '🧀', 'Dairy & Eggs', 8, 'oz', 24, 'Fridge', 'label'),
+    mk('Butter', '🧈', 'Dairy & Eggs', 1, 'lb', 40, 'Fridge', 'label'),
+    mk('Parmesan', '🧀', 'Dairy & Eggs', 5, 'oz', 45, 'Fridge', 'label'),
     mk('Sandwich bread', '🍞', 'Grains & Bread', 1, 'loaf', 4, 'Pantry', 'label'),
     mk('Flour tortillas', '🫓', 'Grains & Bread', 10, 'ct', 9, 'Pantry', 'label'),
     mk('White rice', '🍚', 'Grains & Bread', 2, 'lb', 300, 'Pantry', 'label'),
     mk('Spaghetti', '🍝', 'Grains & Bread', 1, 'lb', 380, 'Pantry', 'label'),
-    mk('All-purpose flour', '🌾', 'Grains & Bread', 5, 'lb', 180, 'Pantry', 'label'),
+    mk('All-purpose flour', '🌾', 'Spices & Baking', 5, 'lb', 180, 'Pantry', 'label'),
     mk('Granola', '🥣', 'Snacks', 12, 'oz', 60, 'Pantry', 'label'),
     mk('Tortilla chips', null, 'Snacks', 1, 'bag', 30, 'Pantry', 'label'),
     mk('Orange juice', '🧃', 'Drinks', 52, 'fl oz', 8, 'Fridge', 'label'),
-    mk('Frozen peas', '🫛', 'Frozen', 12, 'oz', 120, 'Freezer', 'label'),
-    mk('Soy sauce', '🥢', 'Other', 10, 'fl oz', 300, 'Pantry', 'label'),
-    mk('Salsa', '🌶️', 'Other', 16, 'oz', 12, 'Fridge', 'label'),
-    mk('Pasta sauce', '🥫', 'Other', 24, 'oz', 200, 'Pantry', 'label'),
-    mk('Tomato soup', '🥫', 'Other', 2, 'can', 400, 'Pantry', 'label')
+    mk('Frozen peas', '🫛', 'Vegetables', 12, 'oz', 120, 'Freezer', 'label'),
+    mk('Soy sauce', '🥢', 'Sauces & Condiments', 10, 'fl oz', 300, 'Pantry', 'label'),
+    mk('Salsa', '🌶️', 'Sauces & Condiments', 16, 'oz', 12, 'Fridge', 'label'),
+    mk('Pasta sauce', '🥫', 'Sauces & Condiments', 24, 'oz', 200, 'Pantry', 'label'),
+    mk('Tomato soup', '🥫', 'Prepared Meals', 2, 'can', 400, 'Pantry', 'label')
   ];
 }
 
@@ -268,7 +293,7 @@ function rowToItem(r) {
   return {
     id: 'db' + r.ingredient_id, dbId: r.ingredient_id,
     name: r.ingredient_name, emoji: guessEmoji(r.ingredient_name),
-    cat: CATS.includes(r.food_type) ? r.food_type : 'Other',
+    cat: normalizeCategory(r.ingredient_name, r.food_type),
     qty: Number(r.quantity), unit: r.measurement, exp: r.expiration_date,
     legacyUserId: r.user_id ?? null, wayAdded: r.way_added || 'manual',
     store: r.storage_location || (r.food_type === 'Frozen' ? 'Freezer' : 'Fridge'),
@@ -1294,22 +1319,22 @@ function readItemForm() {
    =========================================================== */
 const DETECT = {
   pantry: [
-    { name: 'Honeycrisp apples', emoji: '🍎', cat: 'Produce', unit: 'ct', store: 'Fridge', src: 'ai' },
-    { name: 'Baby carrots', emoji: '🥕', cat: 'Produce', unit: 'bag', store: 'Fridge', src: 'ai' },
-    { name: 'Milk (2%)', emoji: '🥛', cat: 'Dairy', unit: 'gal', store: 'Fridge', src: 'label', d: 12 },
-    { name: 'Cottage cheese', emoji: null, cat: 'Dairy', unit: 'oz', qty: 16, store: 'Fridge', src: 'label', d: 14 },
+    { name: 'Honeycrisp apples', emoji: '🍎', cat: 'Fruits', unit: 'ct', store: 'Fridge', src: 'ai' },
+    { name: 'Baby carrots', emoji: '🥕', cat: 'Vegetables', unit: 'bag', store: 'Fridge', src: 'ai' },
+    { name: 'Milk (2%)', emoji: '🥛', cat: 'Dairy & Eggs', unit: 'gal', store: 'Fridge', src: 'label', d: 12 },
+    { name: 'Cottage cheese', emoji: null, cat: 'Dairy & Eggs', unit: 'oz', qty: 16, store: 'Fridge', src: 'label', d: 14 },
     { name: 'Orange juice', emoji: '🧃', cat: 'Drinks', unit: 'fl oz', qty: 52, store: 'Fridge', src: 'label', d: 9 }
   ],
   receipt: [
     { name: 'Chicken thighs', emoji: '🍗', cat: 'Meat & Seafood', unit: 'lb', store: 'Fridge', src: 'ai' },
-    { name: 'Avocados', emoji: '🥑', cat: 'Produce', unit: 'ct', store: 'Pantry', src: 'ai' },
-    { name: 'Cheddar cheese', emoji: '🧀', cat: 'Dairy', unit: 'oz', qty: 8, store: 'Fridge', src: 'ai' },
+    { name: 'Avocados', emoji: '🥑', cat: 'Fruits', unit: 'ct', store: 'Pantry', src: 'ai' },
+    { name: 'Cheddar cheese', emoji: '🧀', cat: 'Dairy & Eggs', unit: 'oz', qty: 8, store: 'Fridge', src: 'ai' },
     { name: 'Bagels', emoji: '🥯', cat: 'Grains & Bread', unit: 'bag', store: 'Pantry', src: 'ai' },
-    { name: 'Frozen waffles', emoji: '🧇', cat: 'Frozen', unit: 'box', store: 'Freezer', src: 'ai' },
-    { name: 'Heavy cream', emoji: '🥛', cat: 'Dairy', unit: 'fl oz', qty: 16, store: 'Fridge', src: 'ai' }
+    { name: 'Frozen waffles', emoji: '🧇', cat: 'Grains & Bread', unit: 'box', store: 'Freezer', src: 'ai' },
+    { name: 'Heavy cream', emoji: '🥛', cat: 'Dairy & Eggs', unit: 'fl oz', qty: 16, store: 'Fridge', src: 'ai' }
   ],
   barcode: [
-    { name: 'Creamy peanut butter', emoji: '🥜', cat: 'Other', unit: 'jar', store: 'Pantry', src: 'ai' }
+    { name: 'Creamy peanut butter', emoji: '🥜', cat: 'Sauces & Condiments', unit: 'jar', store: 'Pantry', src: 'ai' }
   ]
 };
 let cameraStream = null;
@@ -1523,7 +1548,7 @@ async function photoImage(file) {
   });
 }
 function photoItem(r) {
-  const cat = CATS.includes(r.category) ? r.category : 'Other';
+  const cat = normalizeCategory(r.name || '', r.category);
   const store = ['Fridge', 'Pantry', 'Freezer'].includes(r.storage) ? r.storage : 'Pantry';
   const qty = Number(r.quantity) > 0 ? Number(r.quantity) : 1;
   // A date printed on the package beats our estimate, unless the item is frozen.
@@ -1729,7 +1754,7 @@ async function lookupBarcode(rawBarcode, sc) {
     if (!response.ok) throw new Error(result.error || 'Bar code lookup is unavailable. Try again.');
     if (!current()) return;
     const item = result.item || {};
-    const cat = CATS.includes(item.category) ? item.category : 'Other';
+    const cat = normalizeCategory(item.name || '', item.category);
     const store = ['Fridge', 'Pantry', 'Freezer'].includes(item.storage) ? item.storage : 'Pantry';
     const unit = UNITS_US.includes(item.unit) ? item.unit : 'ct';
     const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
@@ -2546,5 +2571,6 @@ clock(); setInterval(clock, 30000);
 S.inv = []; S.auth = auth ? 'loading' : 'login'; render();
 if (auth) auth.start();
 })();
+
 
 

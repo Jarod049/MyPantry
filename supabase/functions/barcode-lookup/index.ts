@@ -181,23 +181,36 @@ export function cleanOpenFoodFacts(product) {
   };
 }
 
-export function categoryFor(food) {
-  const text = `${food?.description || ''} ${food?.foodCategory || ''}`.toLowerCase();
-  if (/\bfrozen\b|ice cream|frozen dessert/.test(text)) return 'Frozen';
-  if (/snack|pretzel|candy|cookie|cracker|\bchips?\b|popcorn|nuts?\b/.test(text)) return 'Snacks';
-  if (/milk|cheese|yogurt|yoghurt|cream|butter|dairy|egg/.test(text)) return 'Dairy';
-  if (/meat|beef|pork|chicken|turkey|poultry|seafood|fish|shrimp|sausage|bacon/.test(text)) return 'Meat & Seafood';
-  if (/beverage|drink|juice|soda|water|coffee|tea|fruit punch|sports drink/.test(text)) return 'Drinks';
-  if (/fruit|vegetable|produce|apple|banana|lettuce|carrot|potato|onion/.test(text)) return 'Produce';
-  if (/bread|bakery|cereal|grain|pasta|rice|tortilla|bagel|flour/.test(text)) return 'Grains & Bread';
+const CATS = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dairy & Eggs', 'Grains & Bread', 'Snacks', 'Sauces & Condiments', 'Spices & Baking', 'Prepared Meals', 'Drinks', 'Other'];
+function foodCategory(name) {
+  const text = name.toLowerCase();
+  if (/\bflour tortillas?\b/.test(text)) return 'Grains & Bread';
+  if (/\b(beverages?|drinks?|juice|soda|water|coffee|tea|punch|lemonade)\b/.test(text)) return 'Drinks';
+  if (/\b(candy|candies|chocolates?|cookies?|crackers?|chips?|popcorn|pretzels?|granola)\b/.test(text)) return 'Snacks';
+  if (/\b(sauce|salsa|ketchup|mustard|mayonnaise|dressing|vinegar|condiment|soy sauce|cooking oil|olive oil|peanut butter|jam|jelly|syrup|honey)\b/.test(text)) return 'Sauces & Condiments';
+  if (/\b(flour|sugar|salt|pepper|cinnamon|paprika|cumin|spice|seasoning|baking powder|baking soda|yeast|vanilla|cornstarch)\b/.test(text)) return 'Spices & Baking';
+  if (/\b(soup|pizza|lasagna|prepared meal|ready meal|leftovers?|pot pie|burrito|dinner|meal kit)\b/.test(text)) return 'Prepared Meals';
+  if (/\b(snack|pretzel|candy|cookies?|crackers?|chips?|popcorn|nuts?|chocolates?|granola)\b/.test(text)) return 'Snacks';
+  if (/\b(beverage|drinks?|juice|soda|water|coffee|tea|punch|energy drink|lemonade|oat milk|almond milk|soy milk|coconut milk)\b/.test(text)) return 'Drinks';
+  if (/\b(milk|cheese|yogurt|yoghurt|cream|butter|dairy|eggs?|cheddar|parmesan)\b/.test(text)) return 'Dairy & Eggs';
+  if (/\b(meat|beef|pork|chicken|turkey|poultry|seafood|fish|shrimp|sausage|bacon|salmon|tuna)\b/.test(text)) return 'Meat & Seafood';
+  if (/\b(bread|bakery|cereal|grains?|pasta|rice|tortillas?|bagels?|waffles?|oats?|noodles?|spaghetti)\b/.test(text)) return 'Grains & Bread';
+  if (/\b(vegetables?|lettuce|carrots?|potatoes|potato|onions?|broccoli|garlic|spinach|peas?|corn|tomatoes|tomato|peppers?|cabbage|celery|cucumber|zucchini|mushrooms?)\b/.test(text)) return 'Vegetables';
+  if (/\b(fruits?|apples?|bananas?|strawberries|strawberry|raspberries|raspberry|blueberries|blueberry|berries|oranges?|peaches|peach|pears?|grapes?|lemons?|limes?|mango|mangoes|pineapple|melon|avocados?)\b/.test(text)) return 'Fruits';
   return 'Other';
 }
-
+function normalizeCategory(name, category) {
+  if (category === 'Dairy') return 'Dairy & Eggs';
+  if (CATS.includes(category)) return category;
+  return foodCategory(name);
+}
+export function categoryFor(food) {
+  return foodCategory(`${food?.description || ''} ${food?.foodCategory || ''}`);
+}
 export function storageFor(food, category) {
   const text = `${food?.description || ''} ${food?.foodCategory || ''}`.toLowerCase();
-  if (category === 'Frozen') return 'Freezer';
-  if (category === 'Snacks' || category === 'Grains & Bread' || category === 'Drinks') return 'Pantry';
-  if (category === 'Meat & Seafood' || /milk|yogurt|yoghurt|cream|cheese|egg|refrigerated/.test(text)) return 'Fridge';
+  if (/\bfrozen\b|ice cream|frozen dessert/.test(text)) return 'Freezer';
+  if (category === 'Meat & Seafood' || category === 'Dairy & Eggs' || /refrigerated/.test(text)) return 'Fridge';
   return 'Pantry';
 }
 
@@ -259,3 +272,4 @@ export function cleanFood(food) {
 }
 
 Deno.serve(handler);
+
