@@ -103,3 +103,14 @@ test('Supabase password errors are surfaced without claiming success',async()=>{
  const f=fixture(session('alice'));await f.auth.start();f.api.updateUser=async()=>({error:new Error('Password is too weak')});
  await assert.rejects(f.auth.updatePassword('Abc123!x'),/too weak/);assert.equal(f.events.at(-1)[1],'INITIAL_SESSION');
 });
+
+
+test('email update preserves the confirmed email until Supabase confirms the new address',async()=>{
+ const f=fixture(session('alice'));await f.auth.start();
+ f.api.updateUser=async(input,options)=>{f.calls.push({input,options});return {data:{user:{...session('alice').user,new_email:input.email}}};};
+ await f.auth.updateEmail('new@example.test','https://mypantry.example.test/');
+ assert.deepEqual(f.calls.at(-1),{input:{email:'new@example.test'},options:{emailRedirectTo:'https://mypantry.example.test/'}});
+ assert.equal(f.events.at(-1)[0].user.email,'alice@example.test');assert.equal(f.events.at(-1)[0].user.id,'alice');
+ f.emit('USER_UPDATED',{...session('alice'),user:{...session('alice').user,email:'new@example.test'}});await tick();
+ assert.equal(f.events.at(-1)[0].user.email,'new@example.test');assert.equal(f.events.at(-1)[0].user.id,'alice');
+});

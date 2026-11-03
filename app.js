@@ -318,7 +318,7 @@ function hydrate() {
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
       if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
-      if (['deals', 'username', 'password'].includes(nav.setPage)) S.setPage = nav.setPage;
+      if (['deals', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
   try {
@@ -598,6 +598,7 @@ function applySession(session, event) {
     closeSheet(); S = freshState(); S.inv = []; S.auth = 'login';
     render(); return;
   }
+  const previousEmail = S.user?.email;
   const changed = S.user?.id !== user.id;
   if (changed) {
     stopAppSessionTracking();
@@ -612,6 +613,8 @@ function applySession(session, event) {
     S.user.name = user.user_metadata?.name || S.user.name;
     S.user.email = user.email || S.user.email;
   }
+  S.user.pendingEmail = user.new_email || '';
+  if (event === 'USER_UPDATED' && previousEmail !== user.email && S.tab === 'settings') render();
   if (event === 'PASSWORD_RECOVERY') { S.auth = 'recovery'; render(); return; }
   // Refreshing a token or returning to the tab must not reset navigation or chat.
   if (changed || S.auth !== 'app') enterApp();
@@ -1931,6 +1934,19 @@ const DEALS = [
 const price = p => (p * (STORE_MULT[S.store] || 1)).toFixed(2);
 function sw(id, on, label) { return `<span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''} aria-label="${label}"><span></span></span>`; }
 function renderAccountSettings(kind) {
+  if (kind === 'email') return `<div class="appbar"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
+    <div class="scroll"><form class="auth" id="emailForm" novalidate>
+      <h1>Change email</h1>
+      <p>Current email: ${esc(S.user?.email || '')}</p>
+      <p>Confirm the links sent to your current and new email addresses to finish the change. Your pantry stays with this account.</p>
+      ${S.user?.pendingEmail ? `<p class="hint">Pending email: ${esc(S.user.pendingEmail)}</p>` : ''}
+      <div class="err" id="emailErr" role="alert" hidden><span></span></div>
+      <div class="ok" id="emailOk" role="status" hidden><span></span></div>
+      <div class="field"><label for="accountEmail">New email</label><input class="input" id="accountEmail" type="email" autocomplete="email" maxlength="254" required></div>
+      <div class="field"><label for="accountEmailConfirm">Confirm new email</label><input class="input" id="accountEmailConfirm" type="email" autocomplete="email" maxlength="254" required></div>
+      <button class="btn btn-primary" type="submit">Send confirmation links</button>
+      <button class="btn btn-ghost" type="button" data-act="dealsBack">Back to Settings</button>
+    </form></div>`;
   const username = kind === 'username';
   return `<div class="appbar"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
   <div class="scroll"><form class="auth" id="${username ? 'usernameForm' : 'passwordForm'}" novalidate>
@@ -1944,7 +1960,7 @@ function renderAccountSettings(kind) {
   </form></div>`;
 }
 function renderSettings() {
-  if (['username', 'password'].includes(S.setPage)) return renderAccountSettings(S.setPage);
+  if (['username', 'password', 'email'].includes(S.setPage)) return renderAccountSettings(S.setPage);
   const u = S.user || { name: 'User', email: '' };
   const row = (icon, tint, color, title, small, right, act, arg) => `<${act ? `button class="set-row" data-act="${act}" ${arg ? `data-arg="${arg}"` : ''}` : 'div class="set-row"'}><span class="si" style="background:${tint};color:${color}">${ic(icon)}</span><span><b>${title}</b>${small ? `<small>${small}</small>` : ''}</span>${right}</${act ? 'button' : 'div'}>`;
   const chev = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">${P.right}</svg>`;
@@ -1966,6 +1982,7 @@ function renderSettings() {
     </div></div>
     <div class="set-group"><span class="lbl">Account</span><div class="set-card">
       ${row('pencil', 'var(--surface-3)', 'var(--ink-2)', 'Change username', null, chev, 'changeUsername')}
+      ${row('mail', 'var(--surface-3)', 'var(--ink-2)', 'Change email', null, chev, 'changeEmail')}
       ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Change password', null, chev, 'changePw')}
       ${row('logout', 'var(--surface-3)', 'var(--ink-2)', 'Log out', null, '', 'logout')}
     </div></div>
@@ -2231,6 +2248,7 @@ const ACT = {
   dealsBack() { S.setPage = null; render(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
   async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
+  changeEmail() { S.setPage = 'email'; render(); },
   changeUsername() { S.setPage = 'username'; render(); },
   changePw() { S.setPage = 'password'; render(); },
   async logout(_, button) {
@@ -2330,6 +2348,30 @@ function bindForms() {
     const error = form.querySelector(selector); if (!error) return;
     error.hidden = false; error.querySelector('span').textContent = message;
   };
+  const emailForm = $('#emailForm');
+  if (emailForm) emailForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const button = emailForm.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    const email = $('#accountEmail').value.trim().toLowerCase();
+    const confirmation = $('#accountEmailConfirm').value.trim().toLowerCase();
+    emailForm.querySelector('#emailErr').hidden = emailForm.querySelector('#emailOk').hidden = true;
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showError(emailForm, '#emailErr', 'Enter a valid email address.');
+    if (email !== confirmation) return showError(emailForm, '#emailErr', 'The email addresses do not match.');
+    if (email === S.user.email.toLowerCase()) return showError(emailForm, '#emailErr', 'Enter a different email address.');
+    const generation = accountGeneration, owner = S.user.id;
+    button.disabled = true;
+    try {
+      if (!auth || isDemoAccount()) throw new Error('Account changes require your own signed-in account.');
+      const user = await auth.updateEmail(email, redirectTo);
+      if (generation !== accountGeneration || owner !== S.user?.id || !emailForm.isConnected) return;
+      const ok = emailForm.querySelector('#emailOk'); ok.hidden = false;
+      ok.querySelector('span').textContent = user.email.toLowerCase() === email ? 'Email updated. Use your new email next time you sign in.' : 'Confirmation requested. Check both your current and new inboxes, including spam. Your sign-in email stays the same until confirmation is complete.';
+      emailForm.querySelectorAll('input').forEach(input => { input.value = ''; });
+    } catch (error) {
+      if (generation === accountGeneration && owner === S.user?.id && emailForm.isConnected) showError(emailForm, '#emailErr', error.message);
+    } finally { button.disabled = false; }
+  });
   const accountForm = $('#usernameForm') || $('#passwordForm');
   if (accountForm) accountForm.addEventListener('submit', async e => {
     e.preventDefault();
@@ -2504,4 +2546,5 @@ clock(); setInterval(clock, 30000);
 S.inv = []; S.auth = auth ? 'loading' : 'login'; render();
 if (auth) auth.start();
 })();
+
 

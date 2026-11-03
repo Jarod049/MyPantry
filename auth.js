@@ -54,6 +54,17 @@
         const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
         if (error) throw error;
       },
+      async updateEmail(email, redirectTo) {
+        const owner = current?.user?.id;
+        if (!owner) throw new Error('Please sign in again.');
+        const { data, error } = await client.auth.updateUser({ email }, { emailRedirectTo: redirectTo });
+        if (error) throw error;
+        if (current?.user?.id !== owner) throw new Error('The signed-in account changed.');
+        if (!data?.user || data.user.id !== owner) throw new Error('The email change could not be confirmed. Please try again.');
+        ++revision;
+        apply({ ...current, user: data.user }, 'USER_UPDATED');
+        return data.user;
+      },
       async updateName(name) {
         const owner = current?.user?.id;
         if (!owner) throw new Error('Please sign in again.');
@@ -86,4 +97,5 @@
   if (typeof module === 'object' && module.exports) module.exports = { createAuth };
   else root.MyPantryAuth = { createAuth };
 })(typeof window === 'undefined' ? globalThis : window);
+
 

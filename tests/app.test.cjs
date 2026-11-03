@@ -53,11 +53,11 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       },
       async signOut() { saved = null; listener('SIGNED_OUT', null); return {}; },
       async signUp() { return { data: { session: null } }; },
-      async updateUser(input) {
-        queries.push({ authUpdate: input });
+      async updateUser(input, options) {
+        queries.push({ authUpdate: input, options });
         if (accountUpdate) { const result = await accountUpdate(input); if (result?.error) return result; }
         if (!saved) return { error: new Error('Signed out') };
-        saved = { ...saved, user: { ...saved.user, user_metadata: { ...saved.user.user_metadata, ...input.data } } };
+        saved = { ...saved, user: { ...saved.user, ...(input.email ? { new_email: input.email } : {}), user_metadata: { ...saved.user.user_metadata, ...input.data } } };
         listener('USER_UPDATED', saved);
         return { data: { user: saved.user } };
       }
@@ -565,4 +565,33 @@ test('account update finishing after sign-out cannot change the next account',as
  f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeUsername"]');
  f.form('#usernameForm',{accountName:'Alice new name'});await tick();f.emit('SIGNED_OUT',null);await tick();
  finish({});await tick();assert.match(f.text(),/Sign in/);assert.doesNotMatch(f.text(),/Alice new name|Username updated/);
+});
+
+
+test('email change requests confirmation without replacing the account or pantry owner',async t=>{
+ const database=[{auth_user_id:'alice',ingredient_name:'Apples',ingredient_id:1,quantity:2,measurement:'ct',expiration_date:'2030-01-01',food_type:'Produce'}];
+ const f=boot({id:'alice',database});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeEmail"]');
+ f.form('#emailForm',{accountEmail:'NEW@example.test',accountEmailConfirm:'new@example.test'});await tick();
+ const call=f.queries.find(q=>q.authUpdate);assert.equal(call.authUpdate.email,'new@example.test');
+ assert.equal(call.options.emailRedirectTo,'https://mypantry.example.test/');
+ assert.match(f.text(),/Check both/);assert.match(f.text(),/alice@example.test/);
+ assert.equal(database[0].auth_user_id,'alice');
+ f.click('[data-act="dealsBack"]');assert.match(f.text(),/alice@example.test/);
+ f.emit('USER_UPDATED','alice');await tick();assert.match(f.text(),/alice@example.test/);
+});
+test('email form rejects invalid, mismatched and unchanged addresses before Auth calls',async t=>{
+ const f=boot({id:'alice'});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeEmail"]');
+ for(const [email,confirmation,expected] of [['bad','bad',/valid email/],['new@example.test','other@example.test',/do not match/],['alice@example.test','alice@example.test',/different email/]]){
+ f.form('#emailForm',{accountEmail:email,accountEmailConfirm:confirmation});await tick();assert.match(f.text(),expected);
+ }
+ assert.equal(f.queries.filter(q=>q.authUpdate).length,0);
+});
+test('failed email change displays Supabase error and retains the old email',async t=>{
+ const f=boot({id:'alice',accountUpdate:async()=>({error:new Error('Email rate limit exceeded')})});t.after(()=>f.dom.window.close());await tick();
+ f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changeEmail"]');
+ f.form('#emailForm',{accountEmail:'new@example.test',accountEmailConfirm:'new@example.test'});await tick();
+ assert.match(f.text(),/Email rate limit exceeded/);assert.match(f.text(),/alice@example.test/);
+ assert.equal(f.w.document.querySelector('#emailForm button[type="submit"]').disabled,false);
 });
