@@ -11,7 +11,7 @@ try { publicKey ||= JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64url
 if (!publicKey) throw new Error('Use only a Supabase publishable or legacy anon key. Secret keys must never be included in the website.');
 const dist = path.join(root, 'dist');
 fs.mkdirSync(dist, { recursive: true });
-for (const file of ['index.html', 'styles.css', 'app.js', 'auth.js']) fs.copyFileSync(path.join(root, file), path.join(dist, file));
+for (const file of ['index.html', 'styles.css', 'app.js', 'auth.js', 'recipes.js']) fs.copyFileSync(path.join(root, file), path.join(dist, file));
 if (demoAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(demoAccountId)) {
   throw new Error('DEMO_ACCOUNT_ID must be the Demo user UUID from Supabase Auth.');
 }

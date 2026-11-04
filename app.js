@@ -187,7 +187,8 @@ function samplePantry() {
 }
 
 /* ---------- Recipes ---------- */
-const RECIPES = [
+// Launch recipes. The large Reels catalog lives in recipes.js and in the Supabase `recipe` table.
+const BASE_RECIPES = [
   { id: 'stirfry', name: 'Chicken & Broccoli Stir-Fry', emoji: '🥡', type: 'Chinese', main: 'chicken', time: 25, serves: 6, likes: 1240,
     bg: 'radial-gradient(circle at 50% 35%, #e0613f, #8c2413 55%, #2b0b05)', kw: ['stir fry', 'stir-fry', 'stirfry', 'broccoli'],
     ing: [{ m: 'chicken breast', a: 1, label: '1 lb chicken breast' }, { m: 'broccoli', a: 1, label: '1 head broccoli' }, { m: 'garlic', a: .25, label: '3 cloves garlic' }, { m: 'soy sauce', a: 2, label: '1/4 cup soy sauce' }, { m: 'white rice', a: .5, label: '1 1/2 cups rice' }],
@@ -234,7 +235,21 @@ const RECIPES = [
     ing: [{ m: 'chicken breast', a: .75, label: '3/4 lb chicken' }, { m: 'flour tortillas', a: 4, label: '4 tortillas' }, { m: 'lettuce', a: 1, label: '1 head romaine' }, { m: 'parmesan', a: 1, label: '1/4 cup parmesan' }, { m: 'caesar dressing', a: 4, label: '1/2 cup Caesar dressing' }],
     steps: ['Cook and slice chicken', 'Chop the romaine', 'Toss with dressing and parmesan', 'Wrap it up'] }
 ];
+const RECIPES = [...BASE_RECIPES];
+function addRecipes(list) {
+  let added = 0;
+  for (const r of list || []) {
+    if (!r || !r.id || !Array.isArray(r.ing) || !r.ing.length || !Array.isArray(r.steps) || !r.steps.length) continue;
+    const at = RECIPES.findIndex(x => x.id === r.id);
+    if (at >= 0) RECIPES[at] = { ...RECIPES[at], ...r }; else { RECIPES.push(r); added++; }
+  }
+  return added;
+}
+addRecipes(window.MYPANTRY_RECIPES);
 const R = id => RECIPES.find(r => r.id === id);
+// Ingredient keys may list alternatives, e.g. "pasta|spaghetti|penne".
+const altsOf = m => String(m).split('|').map(k => k.trim()).filter(Boolean);
+const ingName = m => altsOf(m)[0];
 
 /* ---------- State ---------- */
 let S;
@@ -332,6 +347,35 @@ function persist() {
   } catch (_) {}
   if (sb && S.user?.id) queueUserAppStateWrite();
 }
+/* Published reels from the Supabase `recipe` table. The built-in catalog keeps the
+   feed full when the table is missing, empty or unreachable. */
+function rowToRecipe(row) {
+  const ing = Array.isArray(row.ingredients) ? row.ingredients
+    .filter(g => g && g.m && g.label).map(g => ({ m: String(g.m).toLowerCase(), a: Number(g.a) || 1, label: String(g.label) })) : [];
+  return {
+    id: row.recipe_id, name: row.name, emoji: row.emoji || '🍽️', type: row.cuisine, main: row.main_ingredient,
+    time: row.minutes, serves: row.serves, likes: row.base_likes || 0,
+    bg: row.background || 'radial-gradient(circle at 50% 35%, #e0613f, #8c2413 55%, #2b0b05)',
+    kw: row.keywords || [], ing, steps: row.steps || [], ...(row.substitutions ? { subs: row.substitutions } : {}),
+    ...(row.video_url ? { video: row.video_url } : {})
+  };
+}
+let remoteRecipesLoaded = false;
+async function loadRemoteRecipes() {
+  if (!sb || remoteRecipesLoaded) return;
+  remoteRecipesLoaded = true;
+  try {
+    const { data, error } = await sb.from('recipe').select('*').eq('is_published', true).order('sort_order').limit(1000);
+    if (error) throw error;
+    if (!Array.isArray(data) || !data.length) return;
+    addRecipes(data.map(rowToRecipe));
+    if (S.auth === 'app' && S.tab === 'reels' && S.reelView === 'feed' && !$('#reelFeed')?.scrollTop) render();
+  } catch (error) {
+    remoteRecipesLoaded = false;
+    console.warn('[MyPantry] recipe catalog unavailable, using built-in reels', error);
+  }
+}
+
 function hydrate() {
   const key = stateKey(); if (!key) return;
   // Keep navigation per browser tab and account. Never restore unfinished scans
@@ -646,7 +690,7 @@ function applySession(session, event) {
 }
 
 /* ---------- Inventory logic ---------- */
-const findItems = m => S.inv.filter(i => i.name.toLowerCase().includes(m) && i.qty > 0).sort(byExp);
+const findItems = m => { const keys = altsOf(m); return S.inv.filter(i => i.qty > 0 && keys.some(k => i.name.toLowerCase().includes(k))).sort(byExp); };
 const has = m => findItems(m).length > 0;
 const canMake = r => r.ing.every(g => has(g.m));
 function missingOf(r) { return r.ing.filter(g => !has(g.m)); }
@@ -1150,7 +1194,7 @@ async function reply(text) {
     const soon = S.inv.filter(i => daysLeft(i) <= 7).sort(byExp);
     if (!soon.length) return '<p>Good news: nothing in your pantry goes bad in the next 7 days.</p>';
     const ids = new Set(soon.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 3).map(i => i.name.toLowerCase()));
-    const recs = makeable().filter(r => r.ing.some(g => [...ids].some(n => n.includes(g.m)))).slice(0, 2);
+    const recs = makeable().filter(r => r.ing.some(g => [...ids].some(n => altsOf(g.m).some(k => n.includes(k))))).slice(0, 2);
     const spoiled = soon.filter(i => daysLeft(i) < 0);
     return `<p>These go bad soonest. Use the top ones first:</p>${expList(soon.slice(0, 6))}
       ${spoiled.length ? `<p>${esc(spoiled.map(i => i.name).join(', '))} already passed ${spoiled.length > 1 ? 'their dates' : 'its date'}. Check ${spoiled.length > 1 ? 'them' : 'it'} before eating.</p>` : ''}
@@ -1168,7 +1212,7 @@ async function reply(text) {
     }
     const alt = makeable().slice(0, 2);
     const m = missing[0];
-    return `<p>I couldn't find an easy ${type} recipe you can make with your food right now.${m ? ` ${esc(m.name)} needs ${esc(missingOf(m).map(g => g.m).join(' and '))}.` : ''}</p>${alt.length ? `<p>Here's what you can make tonight instead:</p>${alt.map(r => rcard(r)).join('')}` : ''}`;
+    return `<p>I couldn't find an easy ${type} recipe you can make with your food right now.${m ? ` ${esc(m.name)} needs ${esc(missingOf(m).map(g => ingName(g.m)).join(' and '))}.` : ''}</p>${alt.length ? `<p>Here's what you can make tonight instead:</p>${alt.map(r => rcard(r)).join('')}` : ''}`;
   }
 
   if (/(hard|fancy|complicated|gourmet|impressive)/.test(t)) {
@@ -1817,6 +1861,20 @@ function renderDone() {
    REELS
    =========================================================== */
 let reelOrder = [];
+const REEL_BATCH = 8;
+// Reels you can cook now come first, then ones missing one or two items, then the rest
+// of the catalog ranked by how much of it you already own and what you tend to like.
+function rankReels() {
+  const can = makeable();
+  const others = RECIPES.filter(r => !canMake(r)).map(r => {
+    const miss = missingOf(r).length;
+    return { r, miss, have: (r.ing.length - miss) / r.ing.length, seen: S.watched.has(r.id) ? 1 : 0 };
+  });
+  const isNear = x => x.miss <= 2 && x.have > 0;
+  const near = others.filter(isNear).sort((a, b) => a.miss - b.miss || a.seen - b.seen || score(b.r) - score(a.r));
+  const rest = others.filter(x => !isNear(x)).sort((a, b) => a.seen - b.seen || b.have - a.have || score(b.r) - score(a.r));
+  return { can: can.length, near: near.length, ids: [...can, ...near.map(x => x.r), ...rest.map(x => x.r)].map(r => r.id) };
+}
 function reelSeg() {
   const n = S.saved.size;
   return `<div class="reel-seg" role="tablist" aria-label="Reels view">
@@ -1825,14 +1883,20 @@ function reelSeg() {
 }
 function renderReels() {
   if (S.reelView === 'saved') return renderSaved();
-  reelOrder = makeable().map(r => r.id);
+  const rank = rankReels();
+  reelOrder = rank.ids;
   if (!reelOrder.length) {
     return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
-      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>You don't have enough ingredients to make anything yet. Try adding more food to your pantry</p>
-      <button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button></div></div></div>`;
+      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>Recipes are loading. Check your connection and try again.</p></div></div></div>`;
   }
-  return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1><div class="sub" id="learnChip">${learnText()}</div></div>${reelSeg()}</div>
-    <div class="reel-feed" id="reelFeed">${reelOrder.map(id => reelHtml(R(id))).join('')}</div></div>`;
+  S.reelShown = Math.min(reelOrder.length, Math.max(REEL_BATCH, S.reelShown || 0));
+  const summary = rank.can
+    ? `${plural(rank.can, 'recipe')} you can make now`
+    : `You don't have enough ingredients to make anything yet. Try adding more food to your pantry`;
+  return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1>
+      <div class="sub reel-count">${summary}${rank.can ? '' : ` <button class="reel-add" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`}</div>
+      <div class="sub" id="learnChip">${learnText()}</div></div>${reelSeg()}</div>
+    <div class="reel-feed" id="reelFeed">${reelOrder.slice(0, S.reelShown).map(id => reelHtml(R(id))).join('')}</div></div>`;
 }
 function renderSaved() {
   const list = [...S.saved].map(R).filter(Boolean);
@@ -1846,7 +1910,7 @@ function renderSaved() {
           <button class="saved-main" data-act="recipe" data-arg="${r.id}" aria-label="Open ${esc(r.name)}">
             <span class="saved-thumb" style="background:${r.bg}">${r.emoji}</span>
             <span class="saved-txt"><b>${esc(r.name)}</b><span>${r.time} min · Easy · ${r.type}</span>
-              <span class="saved-status ${ok ? 'can' : 'cant'}">${ok ? `${ic('check')} You can make this now` : `Missing ${esc(miss.map(g => g.m).join(', '))}`}</span></span>
+              <span class="saved-status ${ok ? 'can' : 'cant'}">${ok ? `${ic('check')} You can make this now` : `Missing ${esc(miss.map(g => ingName(g.m)).join(', '))}`}</span></span>
           </button>
           <div class="saved-actions">
             ${ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Check store deals</button>`}
@@ -1860,24 +1924,28 @@ function reelHtml(r) {
   const spoiled = items.find(i => daysLeft(i) < 0);
   const soon = items.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 3).sort(byExp)[0];
   const liked = S.liked.has(r.id), saved = S.saved.has(r.id);
-  return `<article class="reel" data-id="${r.id}" aria-label="${esc(r.name)}">
+  const miss = missingOf(r), ok = !miss.length;
+  const needs = miss.slice(0, 3).map(g => ingName(g.m)).join(', ') + (miss.length > 3 ? ` +${miss.length - 3} more` : '');
+  return `<article class="reel" data-id="${esc(r.id)}" aria-label="${esc(r.name)}">
     <div class="reel-bg" style="background:${r.bg}"></div>
-    <div class="reel-steam"><i></i><i></i><i></i></div>
+    ${r.video ? `<video class="reel-video" src="${esc(r.video)}" muted loop playsinline preload="metadata"></video>` : `<div class="reel-steam"><i></i><i></i><i></i></div>
     <div class="reel-dish" aria-hidden="true">${r.emoji}</div>
-    <div class="reel-caption" data-si="0"><span class="stepno">Step 1 of ${r.steps.length}</span>${esc(r.steps[0])}</div>
-    <div class="reel-tap" data-act="reelTap" data-arg="${r.id}"></div>
+    <div class="reel-caption" data-si="0"><span class="stepno">Step 1 of ${r.steps.length}</span>${esc(r.steps[0])}</div>`}
+    <div class="reel-tap" data-act="reelTap" data-arg="${esc(r.id)}"></div>
     <div class="rail">
-      <button class="${liked ? 'on' : ''}" data-act="like" data-arg="${r.id}" aria-pressed="${liked}"><span class="ri">${ic('heart', liked)}</span><span class="num">${fmtK(r.likes + (liked ? 1 : 0))}</span></button>
-      <button class="${saved ? 'saved' : ''}" data-act="save" data-arg="${r.id}" aria-pressed="${saved}"><span class="ri">${ic('bookmark', saved)}</span>${saved ? 'Saved' : 'Save'}</button>
-      <button data-act="share" data-arg="${r.id}"><span class="ri">${ic('share')}</span>Share</button>
-      <button data-act="recipe" data-arg="${r.id}"><span class="ri">${ic('list')}</span>Recipe</button>
+      <button class="${liked ? 'on' : ''}" data-act="like" data-arg="${esc(r.id)}" aria-pressed="${liked}"><span class="ri">${ic('heart', liked)}</span><span class="num">${fmtK(r.likes + (liked ? 1 : 0))}</span></button>
+      <button class="${saved ? 'saved' : ''}" data-act="save" data-arg="${esc(r.id)}" aria-pressed="${saved}"><span class="ri">${ic('bookmark', saved)}</span>${saved ? 'Saved' : 'Save'}</button>
+      <button data-act="share" data-arg="${esc(r.id)}"><span class="ri">${ic('share')}</span>Share</button>
+      <button data-act="recipe" data-arg="${esc(r.id)}"><span class="ri">${ic('list')}</span>Recipe</button>
     </div>
     <div class="reel-info">
       <h2>${esc(r.name)}</h2>
-      <div class="reel-meta"><span>⏱ ${r.time} min</span><span>Easy</span><span>${r.type}</span><span>Serves ${r.serves}</span></div>
-      <div class="have">${ic('check')} You have all ${r.ing.length} ingredients</div>
+      <div class="reel-meta"><span>⏱ ${r.time} min</span><span>Easy</span><span>${esc(r.type)}</span><span>Serves ${r.serves}</span></div>
+      ${ok ? `<div class="have">${ic('check')} You have all ${r.ing.length} ingredients</div>`
+        : `<div class="have need">You have ${r.ing.length - miss.length} of ${r.ing.length} · Need ${esc(needs)}</div>`}
       ${spoiled ? `<div class="reel-warn red">Check your ${esc(spoiled.name.toLowerCase())}. It passed its date ${fmtDate(spoiled.exp)}.</div>` : soon ? `<div class="reel-warn">Uses your ${esc(soon.name.toLowerCase())} before it spoils (${plural(daysLeft(soon), 'day')})</div>` : ''}
-      <div class="used-row"><button class="u1" data-act="useAsk" data-arg="${r.id}">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${r.id}">Not yet</button></div>
+      ${ok ? `<div class="used-row"><button class="u1" data-act="useAsk" data-arg="${esc(r.id)}">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${esc(r.id)}">Not yet</button></div>`
+        : `<div class="used-row"><button class="u1" data-act="askNeed" data-arg="${esc(r.id)}">Ask for a swap</button><button class="u2" data-act="nextReel" data-arg="${esc(r.id)}">Next</button></div>`}
     </div>
     <div class="reel-progress"><i></i></div>
   </article>`;
@@ -1886,28 +1954,44 @@ const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'K' : St
 function mountReels() {
   const feed = $('#reelFeed'); if (!feed) return;
   const ctl = { active: null, t: {}, paused: false };
+  const playActive = () => $$('.reel', feed).forEach(el => {
+    const v = el.querySelector('.reel-video'); if (!v) return;
+    if (el.dataset.id === ctl.active && !ctl.paused) v.play?.()?.catch?.(() => {}); else v.pause?.();
+  });
   ctl.io = new IntersectionObserver(es => es.forEach(en => {
     if (en.isIntersecting && en.intersectionRatio >= .6) {
       ctl.active = en.target.dataset.id; ctl.paused = false;
       $$('.reel', feed).forEach(r => { r.classList.remove('paused'); r.querySelector('.play-ind')?.remove(); });
+      playActive();
     }
   }), { root: feed, threshold: [.6] });
   $$('.reel', feed).forEach(r => ctl.io.observe(r));
+  // Load the next batch of reels as the viewer nears the end of what is rendered.
+  ctl.more = () => {
+    if (S.reelShown >= reelOrder.length || feed.scrollTop + feed.clientHeight * 2 < feed.scrollHeight) return;
+    const next = reelOrder.slice(S.reelShown, S.reelShown + REEL_BATCH).map(R).filter(Boolean);
+    S.reelShown += next.length;
+    feed.insertAdjacentHTML('beforeend', next.map(reelHtml).join(''));
+    $$('.reel', feed).slice(-next.length).forEach(r => ctl.io.observe(r));
+  };
+  feed.addEventListener('scroll', ctl.more, { passive: true });
+  ctl.playActive = playActive;
   ctl.timer = setInterval(() => {
     if (!ctl.active || ctl.paused || document.hidden) return;
     const id = ctl.active, el = feed.querySelector(`.reel[data-id="${id}"]`); if (!el) return;
-    const r = R(id), L = 16;
+    const r = R(id); if (!r) return;
+    const L = Math.max(12, r.steps.length * 3.2);
     ctl.t[id] = (ctl.t[id] || 0) + .1;
     const t = ctl.t[id] % L;
     el.querySelector('.reel-progress i').style.width = (t / L * 100) + '%';
     const n = r.steps.length, si = Math.min(n - 1, Math.floor(t / (L / n)));
     const cap = el.querySelector('.reel-caption');
-    if (cap.dataset.si != si) { cap.dataset.si = si; cap.innerHTML = `<span class="stepno">Step ${si + 1} of ${n}</span>${esc(r.steps[si])}`; }
+    if (cap && cap.dataset.si != si) { cap.dataset.si = si; cap.innerHTML = `<span class="stepno">Step ${si + 1} of ${n}</span>${esc(r.steps[si])}`; }
     if (ctl.t[id] >= 5 && !S.watched.has(id)) { S.watched.add(id); learn(r); }
   }, 100);
   reelCtl = ctl;
 }
-function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.io.disconnect(); reelCtl = null; } }
+function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.io.disconnect(); $('#reelFeed')?.removeEventListener('scroll', reelCtl.more); reelCtl = null; } }
 
 function recipeSheet(r) {
   const canUse = canMake(r);
@@ -2095,7 +2179,7 @@ const ACT = {
     closeSheet();
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') S.reelView = 'feed';
+    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; }
     S.tab = arg; render();
   },
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
@@ -2208,7 +2292,7 @@ const ACT = {
 
   reelTap(id, el) {
     if (!reelCtl) return; const reel = el.closest('.reel');
-    reelCtl.paused = !reelCtl.paused; reel.classList.toggle('paused', reelCtl.paused);
+    reelCtl.paused = !reelCtl.paused; reel.classList.toggle('paused', reelCtl.paused); reelCtl.playActive?.();
     reel.querySelector('.play-ind')?.remove();
     if (reelCtl.paused) { const p = document.createElement('div'); p.className = 'play-ind'; p.innerHTML = ic('play'); reel.appendChild(p); }
   },
@@ -2237,7 +2321,7 @@ const ACT = {
   reelView(arg) { S.reelView = arg; render(); },
   openSaved() { S.tab = 'reels'; S.reelView = 'saved'; render(); },
   askMissing(id) {
-    const r = R(id); const miss = missingOf(r).map(g => g.m);
+    const r = R(id); const miss = missingOf(r).map(g => ingName(g.m));
     closeSheet(); S.tab = 'home'; render(); ask(`Do I have ${miss[0]}?`);
   },
   share(id) { openSheet(shareSheet(R(id))); },
@@ -2255,6 +2339,16 @@ const ACT = {
     toast(`Pantry updated for ${esc(r.name)}`, () => { void restorePantrySnapshot(snap); });
   },
   useNot() { closeSheet(); toast('No changes. Your pantry stays the same.', null, 'check'); },
+  nextReel(id, b) {
+    const next = b.closest('.reel').nextElementSibling;
+    if (next) $('#reelFeed').scrollTo({ top: next.offsetTop, behavior: 'smooth' });
+    else toast("You've reached the end. New reels show up as your pantry changes.", null, 'check');
+  },
+  askNeed(id) {
+    const r = R(id); const miss = missingOf(r).map(g => ingName(g.m));
+    closeSheet(); S.tab = 'home'; render();
+    ask(`I want to make ${r.name} but I'm missing ${miss.join(', ')}. What can I swap in from my pantry?`);
+  },
   notYet(id, b) {
     toast('No changes. Your pantry stays the same.');
     const reel = b.closest('.reel'); const next = reel.nextElementSibling;
@@ -2337,6 +2431,7 @@ async function saveItemToDb(id, data) {
 
 function enterApp() {
   if (!S.user?.id) return;
+  void loadRemoteRecipes();
   S.auth = 'app'; S.chat = []; render();
   startAppSessionTracking();
   loadPantry(); loadUserAppState(); loadChatHistory();

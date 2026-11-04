@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {} } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -17,6 +17,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   const mockTables = Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
+  w.IntersectionObserver ||= class { observe() {} unobserve() {} disconnect() {} };
   if (camera) {
     Object.defineProperty(w.navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: camera.getUserMedia } });
     Object.defineProperties(w.HTMLVideoElement.prototype, {
@@ -118,6 +119,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
     }
   }) };
   w.eval(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'));
+  if (!noCatalog) w.eval(fs.readFileSync(path.join(root, 'recipes.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
   return { dom, w, queries, mockTables, emit(event, id) { listener(event, id ? { user: user(id) } : null); },
     click(selector) { const el = w.document.querySelector(selector); assert.ok(el, selector); el.click(); },
@@ -611,4 +613,35 @@ test('manual form offers and persists the selected eleven food categories',async
  assert.deepEqual(options,['Fruits','Vegetables','Meat & Seafood','Dairy & Eggs','Grains & Bread','Snacks','Sauces & Condiments','Spices & Baking','Prepared Meals','Drinks','Other']);
  for(const [id,value] of Object.entries({f_name:'Soy sauce',f_qty:'1',f_unit:'ct',f_cat:'Sauces & Condiments',f_exp:'2030-01-01'}))f.w.document.getElementById(id).value=value;
  f.click('#saveItemBtn');await tick();assert.equal(database.at(-1).food_type,'Sauces & Condiments');
+});
+
+const pantryRow = (id, name, qty = 2, unit = 'ct', owner) => ({ ingredient_id: id, auth_user_id: owner, ingredient_name: name, expiration_date: '2030-01-01', quantity: qty, measurement: unit, food_type: 'Other', storage_location: 'Fridge' });
+test('reels feed shows makeable recipes first, then near matches, from the large catalog', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'reeler'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'reeler'), pantryRow(3, 'Butter', 1, 'lb', 'reeler')];
+  const f = boot({ id: 'reeler', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  const reels = [...f.w.document.querySelectorAll('.reel')];
+  assert.ok(f.w.MYPANTRY_RECIPES.length >= 100, 'catalog has 100+ recipes');
+  assert.equal(reels.length, 8, 'first batch renders 8 reels');
+  assert.equal(reels[0].dataset.id, 'scrambled');
+  assert.match(reels[0].textContent, /You have all 3 ingredients/);
+  assert.match(f.text(), /1 recipe you can make now/);
+  const near = reels.find(r => /You have \d of \d · Need/.test(r.textContent));
+  assert.ok(near, 'near-match reels appear after makeable ones');
+  assert.ok(near.querySelector('[data-act="askNeed"]'));
+});
+test('reels feed is never empty and offers Add food when nothing is makeable', async t => {
+  const f = boot({ id: 'emptyreels', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  assert.ok(f.w.document.querySelectorAll('.reel').length > 0);
+  assert.ok(f.w.document.querySelector('.reel-add[data-arg="scan"]'));
+});
+test('published recipes from Supabase are added to Reels', async t => {
+  const tables = { recipe: [{ recipe_id: 'supa-toast', name: 'Supabase Toast', emoji: '🍞', cuisine: 'Breakfast', main_ingredient: 'bread',
+    minutes: 5, serves: 1, base_likes: 9, background: null, keywords: [], ingredients: [{ m: 'bread', a: .1, label: '1 slice bread' }],
+    steps: ['Toast it', 'Eat it'], substitutions: null, is_published: true, sort_order: 0 }] };
+  const f = boot({ id: 'supa', database: [pantryRow(1, 'Bread', 1, 'loaf', 'supa')], tables, noCatalog: true }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  assert.ok(f.queries.some(q => q.table === 'recipe' && q.column === 'is_published'));
+  assert.ok(f.w.document.querySelector('.reel[data-id="supa-toast"]'));
 });
