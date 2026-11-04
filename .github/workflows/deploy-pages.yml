@@ -28,39 +28,13 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           DEMO_ACCOUNT_ID: ${{ vars.DEMO_ACCOUNT_ID }}
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const url = process.env.SUPABASE_URL;
-          const key = process.env.SUPABASE_PUBLISHABLE_KEY;
-          const demoAccountId = (process.env.DEMO_ACCOUNT_ID || '').trim().toLowerCase();
-          if (!url || !key) {
-            throw new Error('Add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY as repository Actions secrets, then rerun this workflow.');
-          }
-          if (!key.startsWith('sb_publishable_')) {
-            throw new Error('SUPABASE_PUBLISHABLE_KEY must be a browser-safe sb_publishable_ key.');
-          }
-          if (new URL(url).protocol !== 'https:') {
-            throw new Error('SUPABASE_URL must use HTTPS.');
-          }
-          if (demoAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(demoAccountId)) {
-            throw new Error('DEMO_ACCOUNT_ID must be the Demo user UUID from Supabase Auth.');
-          }
-          fs.mkdirSync('_site', { recursive: true });
-          for (const file of ['index.html', 'app.js', 'auth.js', 'recipes.js', 'styles.css']) {
-            fs.copyFileSync(file, '_site/' + file);
-          }
-          fs.writeFileSync('_site/config.js',
-            'window.MYPANTRY_CONFIG = ' +
-            JSON.stringify({ supabaseUrl: url, supabaseKey: key, demoAccountId }) +
-            ';\n');
-          NODE
+        run: node scripts/build.cjs
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload website
         uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: dist
       - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4
