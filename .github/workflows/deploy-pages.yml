@@ -47,7 +47,7 @@ jobs:
             throw new Error('DEMO_ACCOUNT_ID must be the Demo user UUID from Supabase Auth.');
           }
           fs.mkdirSync('_site', { recursive: true });
-          for (const file of ['index.html', 'app.js', 'auth.js', 'styles.css']) {
+          for (const file of ['index.html', 'app.js', 'auth.js', 'recipes.js', 'styles.css']) {
             fs.copyFileSync(file, '_site/' + file);
           }
           fs.writeFileSync('_site/config.js',

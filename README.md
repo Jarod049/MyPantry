@@ -65,6 +65,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Test the password-reset email and save a new password.
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
+Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed lists recipes you can make now, then ones missing one or two ingredients, then the rest, loading 8 at a time.
+
 Receipt photos are read by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
 
 Camera scan screens use a live rear-camera preview when `getUserMedia` is available over HTTPS or localhost. The shutter captures one still frame for analysis; gallery upload and file capture remain available when live preview is unsupported or permission is denied.
