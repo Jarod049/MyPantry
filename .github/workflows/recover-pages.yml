@@ -1,0 +1,22 @@
+name: Recover stuck Pages deployment
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/recover-pages.yml]
+  workflow_dispatch:
+permissions:
+  pages: write
+jobs:
+  cancel-stuck-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel the stalled Pages deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST repos/Jarod049/MyPantry/pages/deployments/bd7882fbb2c83c1cebdae41647a09a490312d70a/cancel
+      - name: Check Pages deployment status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/Jarod049/MyPantry/pages/deployments/bd7882fbb2c83c1cebdae41647a09a490312d70a/status
