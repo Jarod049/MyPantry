@@ -616,41 +616,33 @@ test('manual form offers and persists the selected eleven food categories',async
 });
 
 const pantryRow = (id, name, qty = 2, unit = 'ct', owner) => ({ ingredient_id: id, auth_user_id: owner, ingredient_name: name, expiration_date: '2030-01-01', quantity: qty, measurement: unit, food_type: 'Other', storage_location: 'Fridge' });
-test('reels feed shows makeable recipes first, then near matches, from the large catalog', async t => {
+test('reels feed shows only recipes you can make, then an option for ones needing more', async t => {
   const database = [pantryRow(1, 'Eggs', 12, 'ct', 'reeler'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'reeler'), pantryRow(3, 'Butter', 1, 'lb', 'reeler')];
   const f = boot({ id: 'reeler', database }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
-  const all = [...f.w.document.querySelectorAll('.reel')];
-  const reels = all.filter(r => !r.classList.contains('reel-card'));
+  const ids = () => [...f.w.document.querySelectorAll('.reel')].map(r => r.dataset.id);
   assert.ok(f.w.MYPANTRY_RECIPES.length >= 100, 'catalog has 100+ recipes');
-  assert.equal(all.length, 8, 'first batch renders 8 entries');
-  assert.equal(reels[0].dataset.id, 'scrambled');
-  assert.match(reels[0].textContent, /You have all 3 ingredients/);
+  assert.deepEqual(ids(), ['scrambled', 'card-offer'], 'only makeable reels, then the offer card');
   assert.match(f.text(), /1 recipe you can make now/);
-  assert.equal(all[1].dataset.id, 'card-near', 'a divider explains the switch to near matches');
-  const near = reels.find(r => /Need .+You have \d of \d ingredients/.test(r.textContent));
-  assert.ok(near, 'near-match reels appear after makeable ones');
+  assert.match(f.text(), /You have all 3 ingredients/);
+  f.click('[data-act="reelMore"][data-arg="on"]'); await tick();
+  assert.deepEqual(ids().slice(0, 2), ['scrambled', 'card-more']);
+  const near = [...f.w.document.querySelectorAll('.reel:not(.reel-card)')].find(r => /Need .+You have \d of \d ingredients/.test(r.textContent));
+  assert.ok(near, 'recipes needing more ingredients show what is missing');
   assert.ok(near.querySelector('[data-act="askNeed"]'));
+  f.click('[data-act="reelMore"][data-arg="off"]'); await tick();
+  assert.deepEqual(ids(), ['scrambled', 'card-offer'], 'can switch back to only what you can make');
 });
-test('far-off recipes stay hidden until Explore more, and Can make lists only makeable reels', async t => {
-  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'gate'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'gate'), pantryRow(3, 'Butter', 1, 'lb', 'gate')];
-  const f = boot({ id: 'gate', database }); t.after(() => f.dom.window.close()); await tick();
-  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
-  f.click('[data-act="reelView"][data-arg="ready"]'); await tick();
-  assert.deepEqual([...f.w.document.querySelectorAll('.reel')].map(r => r.dataset.id), ['scrambled']);
-  const g = boot({ id: 'gate2', database: [] }); t.after(() => g.dom.window.close()); await tick();
-  g.click('[data-act="tab"][data-arg="reels"]'); await tick();
-  const ids = () => [...g.w.document.querySelectorAll('.reel')].map(r => r.dataset.id);
-  assert.deepEqual(ids(), ['card-explore'], 'with nothing close, far-off recipes wait behind Explore');
-  g.click('[data-act="reelExplore"]'); await tick();
-  assert.equal(ids()[0], 'card-more');
-  assert.ok(ids().length > 5, 'Explore reveals the rest of the catalog');
-});
-test('reels feed is never empty and offers Add food when nothing is makeable', async t => {
+test('with nothing makeable, Reels explains why and can show recipes needing more', async t => {
   const f = boot({ id: 'emptyreels', database: [] }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
-  assert.ok(f.w.document.querySelectorAll('.reel').length > 0);
-  assert.ok(f.w.document.querySelector('.reel-add[data-arg="scan"]'));
+  assert.equal(f.w.document.querySelectorAll('.reel').length, 0);
+  assert.match(f.text(), /don't have enough ingredients/);
+  assert.ok(f.w.document.querySelector('.reels-empty [data-act="tab"][data-arg="scan"]'));
+  f.click('[data-act="reelMore"][data-arg="on"]'); await tick();
+  const ids = [...f.w.document.querySelectorAll('.reel')].map(r => r.dataset.id);
+  assert.equal(ids[0], 'card-more');
+  assert.ok(ids.length > 5);
 });
 test('published recipes from Supabase are added to Reels', async t => {
   const tables = { recipe: [{ recipe_id: 'supa-toast', name: 'Supabase Toast', emoji: '🍞', cuisine: 'Breakfast', main_ingredient: 'bread',
