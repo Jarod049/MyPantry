@@ -620,15 +620,31 @@ test('reels feed shows makeable recipes first, then near matches, from the large
   const database = [pantryRow(1, 'Eggs', 12, 'ct', 'reeler'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'reeler'), pantryRow(3, 'Butter', 1, 'lb', 'reeler')];
   const f = boot({ id: 'reeler', database }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
-  const reels = [...f.w.document.querySelectorAll('.reel')];
+  const all = [...f.w.document.querySelectorAll('.reel')];
+  const reels = all.filter(r => !r.classList.contains('reel-card'));
   assert.ok(f.w.MYPANTRY_RECIPES.length >= 100, 'catalog has 100+ recipes');
-  assert.equal(reels.length, 8, 'first batch renders 8 reels');
+  assert.equal(all.length, 8, 'first batch renders 8 entries');
   assert.equal(reels[0].dataset.id, 'scrambled');
   assert.match(reels[0].textContent, /You have all 3 ingredients/);
   assert.match(f.text(), /1 recipe you can make now/);
-  const near = reels.find(r => /You have \d of \d · Need/.test(r.textContent));
+  assert.equal(all[1].dataset.id, 'card-near', 'a divider explains the switch to near matches');
+  const near = reels.find(r => /Need .+You have \d of \d ingredients/.test(r.textContent));
   assert.ok(near, 'near-match reels appear after makeable ones');
   assert.ok(near.querySelector('[data-act="askNeed"]'));
+});
+test('far-off recipes stay hidden until Explore more, and Can make lists only makeable reels', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'gate'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'gate'), pantryRow(3, 'Butter', 1, 'lb', 'gate')];
+  const f = boot({ id: 'gate', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  f.click('[data-act="reelView"][data-arg="ready"]'); await tick();
+  assert.deepEqual([...f.w.document.querySelectorAll('.reel')].map(r => r.dataset.id), ['scrambled']);
+  const g = boot({ id: 'gate2', database: [] }); t.after(() => g.dom.window.close()); await tick();
+  g.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  const ids = () => [...g.w.document.querySelectorAll('.reel')].map(r => r.dataset.id);
+  assert.deepEqual(ids(), ['card-explore'], 'with nothing close, far-off recipes wait behind Explore');
+  g.click('[data-act="reelExplore"]'); await tick();
+  assert.equal(ids()[0], 'card-more');
+  assert.ok(ids().length > 5, 'Explore reveals the rest of the catalog');
 });
 test('reels feed is never empty and offers Add food when nothing is makeable', async t => {
   const f = boot({ id: 'emptyreels', database: [] }); t.after(() => f.dom.window.close()); await tick();

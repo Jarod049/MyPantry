@@ -250,6 +250,17 @@ const R = id => RECIPES.find(r => r.id === id);
 // Ingredient keys may list alternatives, e.g. "pasta|spaghetti|penne".
 const altsOf = m => String(m).split('|').map(k => k.trim()).filter(Boolean);
 const ingName = m => altsOf(m)[0];
+// Friendly name for a missing ingredient: its label without the amount ("3/4 cup BBQ sauce" -> "BBQ sauce").
+const needName = g => {
+  const n = String(g.label || '').replace(/\(.*?\)/g, '')
+    .replace(/^(a\s+)?[\d\s\/.½¼¾-]*(thick\s+)?(cups?|tbsp|tsp|lbs?|oz|cans?|cloves?|slices?|heads?|bunch(es)?|packs?|jars?|blocks?|bags?|sleeves?|loa(f|ves)|handful of|pinch of|stalks?)?\s+(of\s+)?/i, '').trim();
+  // Generic labels ("veggies", "sauce") read better as the actual options, e.g. "broccoli or carrot".
+  if (!n || /\d/.test(n) || /^(chopped\s+)?(veggies|vegetables|fruit|greens|sauce|crunch|chopped|cups?|mix-in|chips for topping)$/i.test(n)) {
+    const a = altsOf(g.m).slice(0, 3);
+    return a.length > 1 ? `${a.slice(0, -1).join(', ')} or ${a[a.length - 1]}` : a[0];
+  }
+  return n;
+};
 
 /* ---------- State ---------- */
 let S;
@@ -369,7 +380,7 @@ async function loadRemoteRecipes() {
     if (error) throw error;
     if (!Array.isArray(data) || !data.length) return;
     addRecipes(data.map(rowToRecipe));
-    if (S.auth === 'app' && S.tab === 'reels' && S.reelView === 'feed' && !$('#reelFeed')?.scrollTop) render();
+    if (S.auth === 'app' && S.tab === 'reels' && S.reelView !== 'saved' && !$('#reelFeed')?.scrollTop) render();
   } catch (error) {
     remoteRecipesLoaded = false;
     console.warn('[MyPantry] recipe catalog unavailable, using built-in reels', error);
@@ -386,7 +397,7 @@ function hydrate() {
       if (['home', 'ing', 'scan', 'reels', 'settings'].includes(nav.tab)) S.tab = nav.tab;
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
-      if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
+      if (['feed', 'ready', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
       if (['deals', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
@@ -1873,30 +1884,55 @@ function rankReels() {
   const isNear = x => x.miss <= 2 && x.have > 0;
   const near = others.filter(isNear).sort((a, b) => a.miss - b.miss || a.seen - b.seen || score(b.r) - score(a.r));
   const rest = others.filter(x => !isNear(x)).sort((a, b) => a.seen - b.seen || b.have - a.have || score(b.r) - score(a.r));
-  return { can: can.length, near: near.length, ids: [...can, ...near.map(x => x.r), ...rest.map(x => x.r)].map(r => r.id) };
+  return { can: can.map(r => r.id), near: near.map(x => x.r.id), rest: rest.map(x => x.r.id) };
+}
+// Feed entries are recipe ids, plus "card:<kind>" section cards that explain what comes next.
+function feedEntries(rank) {
+  if (S.reelView === 'ready') return rank.can;
+  const out = [...rank.can];
+  if (rank.near.length) out.push(rank.can.length ? 'card:near' : 'card:none-near', ...rank.near);
+  if (rank.rest.length) out.push(...(S.reelExplore ? ['card:more', ...rank.rest] : ['card:explore']));
+  else out.push('card:end');
+  return out;
 }
 function reelSeg() {
-  const n = S.saved.size;
-  return `<div class="reel-seg" role="tablist" aria-label="Reels view">
-    <button role="tab" class="${S.reelView !== 'saved' ? 'on' : ''}" aria-selected="${S.reelView !== 'saved'}" data-act="reelView" data-arg="feed">For you</button>
-    <button role="tab" class="${S.reelView === 'saved' ? 'on' : ''}" aria-selected="${S.reelView === 'saved'}" data-act="reelView" data-arg="saved">Saved${n ? ` <span class="num">${n}</span>` : ''}</button></div>`;
+  const n = S.saved.size, v = S.reelView || 'feed';
+  const tab = (key, label) => `<button role="tab" class="${v === key ? 'on' : ''}" aria-selected="${v === key}" data-act="reelView" data-arg="${key}">${label}</button>`;
+  return `<div class="reel-seg" role="tablist" aria-label="Reels view">${tab('feed', 'For you')}${tab('ready', 'Can make')}${tab('saved', `Saved${n ? ` <span class="num">${n}</span>` : ''}`)}</div>`;
 }
 function renderReels() {
   if (S.reelView === 'saved') return renderSaved();
   const rank = rankReels();
-  reelOrder = rank.ids;
+  reelOrder = feedEntries(rank);
+  const addBtn = `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`;
   if (!reelOrder.length) {
     return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
-      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>Recipes are loading. Check your connection and try again.</p></div></div></div>`;
+      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>You don't have enough ingredients to make anything yet. Try adding more food to your pantry</p>
+      <div class="reels-empty-btns">${addBtn}${rank.near.length ? `<button class="btn btn-sm reel-ghost-btn" data-act="reelView" data-arg="feed">See recipes you're close to</button>` : ''}</div></div></div></div>`;
   }
   S.reelShown = Math.min(reelOrder.length, Math.max(REEL_BATCH, S.reelShown || 0));
-  const summary = rank.can
-    ? `${plural(rank.can, 'recipe')} you can make now`
-    : `You don't have enough ingredients to make anything yet. Try adding more food to your pantry`;
+  const summary = rank.can.length ? `${plural(rank.can.length, 'recipe')} you can make now` : 'Nothing you can make yet';
   return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1>
-      <div class="sub reel-count">${summary}${rank.can ? '' : ` <button class="reel-add" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`}</div>
+      <div class="sub reel-count">${summary}${rank.can.length ? '' : ` <button class="reel-add" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`}</div>
       <div class="sub" id="learnChip">${learnText()}</div></div>${reelSeg()}</div>
-    <div class="reel-feed" id="reelFeed">${reelOrder.slice(0, S.reelShown).map(id => reelHtml(R(id))).join('')}</div></div>`;
+    <div class="reel-feed" id="reelFeed">${reelOrder.slice(0, S.reelShown).map(entryHtml).join('')}</div></div>`;
+}
+const entryHtml = e => e.startsWith('card:') ? reelCard(e.slice(5)) : (R(e) ? reelHtml(R(e)) : '');
+function reelCard(kind) {
+  const C = {
+    near: ['🛒', "That's everything you can make right now", "Next up: recipes you're only 1 or 2 ingredients away from. Each one shows what's missing."],
+    'none-near': ['🛒', "You can't make a full recipe yet", "These are recipes you're only 1 or 2 ingredients away from. Each one shows what's missing."],
+    explore: ['🧭', "You've seen every recipe that fits your pantry", 'Want more ideas? The rest of the catalog needs several things you don\'t have yet.'],
+    more: ['🧭', 'More recipes to explore', 'These need several ingredients you don\'t have. Save any you like for your next grocery trip.'],
+    end: ['✅', "You're all caught up", 'New reels show up as your pantry changes.']
+  }[kind];
+  if (!C) return '';
+  const btns = kind === 'explore'
+    ? `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="reelExplore">Explore more recipes</button>`
+    : kind === 'end' ? `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>` : '';
+  return `<article class="reel reel-card" data-id="card-${kind}" aria-label="${esc(C[1])}">
+    <div class="reel-card-in"><div class="reel-card-em" aria-hidden="true">${C[0]}</div><h2>${esc(C[1])}</h2><p>${esc(C[2])}</p>${btns}
+    ${kind === 'near' || kind === 'none-near' || kind === 'more' ? '<div class="reel-card-hint">Swipe up</div>' : ''}</div></article>`;
 }
 function renderSaved() {
   const list = [...S.saved].map(R).filter(Boolean);
@@ -1925,7 +1961,7 @@ function reelHtml(r) {
   const soon = items.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 3).sort(byExp)[0];
   const liked = S.liked.has(r.id), saved = S.saved.has(r.id);
   const miss = missingOf(r), ok = !miss.length;
-  const needs = miss.slice(0, 3).map(g => ingName(g.m)).join(', ') + (miss.length > 3 ? ` +${miss.length - 3} more` : '');
+  const needs = miss.slice(0, 3).map(needName).join(', ') + (miss.length > 3 ? ` +${miss.length - 3} more` : '');
   return `<article class="reel" data-id="${esc(r.id)}" aria-label="${esc(r.name)}">
     <div class="reel-bg" style="background:${r.bg}"></div>
     ${r.video ? `<video class="reel-video" src="${esc(r.video)}" muted loop playsinline preload="metadata"></video>` : `<div class="reel-steam"><i></i><i></i><i></i></div>
@@ -1942,7 +1978,7 @@ function reelHtml(r) {
       <h2>${esc(r.name)}</h2>
       <div class="reel-meta"><span>⏱ ${r.time} min</span><span>Easy</span><span>${esc(r.type)}</span><span>Serves ${r.serves}</span></div>
       ${ok ? `<div class="have">${ic('check')} You have all ${r.ing.length} ingredients</div>`
-        : `<div class="have need">You have ${r.ing.length - miss.length} of ${r.ing.length} · Need ${esc(needs)}</div>`}
+        : `<div class="need-row"><span class="need-ic">${ic('store')}</span><span><b>Need ${esc(needs)}</b><small>You have ${r.ing.length - miss.length} of ${r.ing.length} ingredients</small></span></div>`}
       ${spoiled ? `<div class="reel-warn red">Check your ${esc(spoiled.name.toLowerCase())}. It passed its date ${fmtDate(spoiled.exp)}.</div>` : soon ? `<div class="reel-warn">Uses your ${esc(soon.name.toLowerCase())} before it spoils (${plural(daysLeft(soon), 'day')})</div>` : ''}
       ${ok ? `<div class="used-row"><button class="u1" data-act="useAsk" data-arg="${esc(r.id)}">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${esc(r.id)}">Not yet</button></div>`
         : `<div class="used-row"><button class="u1" data-act="askNeed" data-arg="${esc(r.id)}">Ask for a swap</button><button class="u2" data-act="nextReel" data-arg="${esc(r.id)}">Next</button></div>`}
@@ -1969,9 +2005,9 @@ function mountReels() {
   // Load the next batch of reels as the viewer nears the end of what is rendered.
   ctl.more = () => {
     if (S.reelShown >= reelOrder.length || feed.scrollTop + feed.clientHeight * 2 < feed.scrollHeight) return;
-    const next = reelOrder.slice(S.reelShown, S.reelShown + REEL_BATCH).map(R).filter(Boolean);
+    const next = reelOrder.slice(S.reelShown, S.reelShown + REEL_BATCH);
     S.reelShown += next.length;
-    feed.insertAdjacentHTML('beforeend', next.map(reelHtml).join(''));
+    feed.insertAdjacentHTML('beforeend', next.map(entryHtml).join(''));
     $$('.reel', feed).slice(-next.length).forEach(r => ctl.io.observe(r));
   };
   feed.addEventListener('scroll', ctl.more, { passive: true });
@@ -2179,7 +2215,7 @@ const ACT = {
     closeSheet();
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; }
+    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelExplore = false; }
     S.tab = arg; render();
   },
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
@@ -2318,7 +2354,12 @@ const ACT = {
     S.saved.delete(id); persist(); render();
     toast('Removed from your saved recipes', () => { S.saved.add(id); persist(); render(); }, 'bookmark');
   },
-  reelView(arg) { S.reelView = arg; render(); },
+  reelView(arg) { S.reelView = arg; S.reelShown = 0; render(); },
+  reelExplore() {
+    const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0;
+    S.reelExplore = true; S.reelShown = (S.reelShown || 0) + REEL_BATCH; render();
+    const f2 = $('#reelFeed'); if (f2) { f2.scrollTop = st; const c = f2.querySelector('[data-id="card-more"]'); if (c) f2.scrollTo({ top: c.offsetTop, behavior: 'smooth' }); }
+  },
   openSaved() { S.tab = 'reels'; S.reelView = 'saved'; render(); },
   askMissing(id) {
     const r = R(id); const miss = missingOf(r).map(g => ingName(g.m));
@@ -2345,7 +2386,7 @@ const ACT = {
     else toast("You've reached the end. New reels show up as your pantry changes.", null, 'check');
   },
   askNeed(id) {
-    const r = R(id); const miss = missingOf(r).map(g => ingName(g.m));
+    const r = R(id); const miss = missingOf(r).map(needName);
     closeSheet(); S.tab = 'home'; render();
     ask(`I want to make ${r.name} but I'm missing ${miss.join(', ')}. What can I swap in from my pantry?`);
   },
