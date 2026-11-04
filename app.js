@@ -1032,7 +1032,7 @@ function renderApp() {
   else if (S.tab === 'reels') body = renderReels();
   else if (S.tab === 'settings') body = S.setPage === 'deals' ? renderDeals() : renderSettings();
   const cam = (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage)) ? renderCamera() : '';
-  return `<div class="view">${body}</div>${tabbar()}${cam}`;
+  return `<div class="view page-content page-${S.tab}">${body}</div>${tabbar()}${cam}`;
 }
 function tabbar() {
   const urgent = S.inv.filter(i => daysLeft(i) <= 2).length;
@@ -2707,12 +2707,12 @@ $('.tools').addEventListener('click', async e => {
 demoToggle.addEventListener('click', () => toggleDemoTools(!demoPanel.classList.contains('open')));
 
 /* ---------- Clock ---------- */
-const clock = () => { const c = $('#clock'); if (c) c.textContent = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M/, ''); };
-clock(); setInterval(clock, 30000);
+
 
 S.inv = []; S.auth = auth ? 'loading' : 'login'; render();
 if (auth) auth.start();
 })();
+
 
 
 

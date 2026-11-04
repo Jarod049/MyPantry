@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
@@ -17,4 +18,12 @@ if (demoAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{
 }
 const config = { supabaseUrl, supabaseKey, demoAccountId };
 fs.writeFileSync(path.join(dist, 'config.js'), 'window.MYPANTRY_CONFIG = ' + JSON.stringify(config) + ';\n');
+// New asset URLs make each deployment visible without a hard refresh.
+let html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+for (const file of ['styles.css', 'app.js', 'auth.js', 'recipes.js', 'config.js']) {
+  const version = createHash('sha256').update(fs.readFileSync(path.join(dist, file))).digest('hex').slice(0, 12);
+  html = html.replaceAll('"' + file + '"', '"' + file + '?v=' + version + '"');
+}
+fs.writeFileSync(path.join(dist, 'index.html'), html);
 console.log('Built Supabase-connected app in dist/');
+
