@@ -7,6 +7,9 @@ the account data currently used by the app.
 ## What syncs
 
 - Pantry additions, edits, deletions, recipe consumption, and reset operations.
+- Confirmed food waste in `food_waste_events`: the ingredient, amount, unit,
+  reason, and time reported by the user. Waste history stays available after
+  the ingredient is removed or the inventory is reset.
 - Saved, liked, and watched recipe IDs, recipe preferences, unit preference,
   preferred store, and the ZIP code used for local deals.
 - Spoil-reminder and unit preferences.
@@ -37,13 +40,27 @@ migration.
    Supabase SQL Editor. It grants authenticated accounts permission to delete
    only their own pantry rows. Reset, empty, recipe consumption, and Demo pantry
    tools require this policy.
-5. Deploy the matching frontend through the existing Pages workflow. It uses
+5. Review and apply `supabase/migrations/20261104_food_waste_tracking.sql` in
+   the Supabase SQL Editor before deploying food waste tracking. It creates an
+   owner-scoped waste history and a function that records waste while reducing
+   or removing the corresponding pantry amount in one database transaction.
+   Authenticated app clients add waste records through the function and can
+   read only their own records.
+6. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-6. In a preview build, sign in and check that pantry edits, deletion, recipe
-   consumption, recipe activity, settings, and chat messages remain after a
-   reload. Check two accounts to confirm they cannot see each other's records.
+7. In a preview build, sign in and check that pantry edits, deletion, recipe
+   consumption, food waste, recipe activity, settings, and chat messages remain
+   after a reload. Check two accounts to confirm they cannot see each other's
+   records.
 
-The migration is additive and does not copy or reassign legacy numeric user
-records. Do not deploy the new frontend before the migration, because its new
-account-state and chat tables will not exist yet.
+Food waste is recorded only when a user explicitly logs it. An expired date or
+an ordinary ingredient deletion does not count as waste. Waste reports retain
+the ingredient's unit; totals with incompatible units such as pounds, gallons,
+and counts must not be summed into one amount. Reset inventory removes pantry
+rows but preserves food waste history.
+
+These migrations are additive and do not copy or reassign legacy numeric user
+records. Apply the matching migration before deploying each frontend feature;
+the account-state and chat tables and the food-waste function must exist before
+the app can use them.

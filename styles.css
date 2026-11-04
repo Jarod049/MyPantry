@@ -399,6 +399,28 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .summary-strip .r b { color: var(--tomato); } .summary-strip .y b { color: var(--butter); }
 .soon-note { margin: 12px 18px 0; font-size: 13px; color: var(--ink-2); }
 
+/* Food waste summary and history */
+.waste-card {
+  display: block; width: calc(100% - 28px); min-height: 72px; margin: 12px 14px 0;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); color: var(--ink); text-align: left;
+}
+.waste-card:hover { border-color: var(--basil); background: var(--surface-2); }
+.waste-card:focus-visible { outline: 2.5px solid var(--sky); outline-offset: 3px; }
+.waste-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.waste-card-title { font-size: 14px; font-weight: 700; }
+.waste-card-link { color: var(--basil); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.waste-card-count { display: inline-block; margin-top: 5px; font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1.2; }
+.waste-card-amount { display: inline-block; margin-left: 8px; color: var(--ink-2); font-size: 13px; }
+.waste-list { display: grid; }
+.waste-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.waste-row:last-child { border-bottom: 0; }
+.waste-row-main { min-width: 0; }
+.waste-row-name { display: block; font-size: 14.5px; font-weight: 650; overflow-wrap: anywhere; }
+.waste-row-meta { display: block; color: var(--ink-3); font-size: 12px; }
+.waste-row-qty { color: var(--ink-2); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.waste-empty { padding: 26px 16px; border-radius: var(--r-md); background: var(--surface-2); color: var(--ink-2); text-align: center; font-size: 14px; }
+
 /* ---------- Sheets & modals ---------- */
 .scrim { position: absolute; inset: 0; background: rgba(8, 16, 12, .45); z-index: 50; display: flex; align-items: flex-end; animation: fade .18s; }
 .scrim.center-modal { align-items: center; justify-content: center; padding: 24px; }

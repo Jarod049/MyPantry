@@ -271,7 +271,7 @@ function freshState() {
     remembered: false, faceId: true, stayIn: false, metric: false, reminders: true,
     store: "Smith's", zip: '',
     prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
-    chat: [], pending: null, undo: null,
+    chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     ingView: 'all', ingCat: 'All', ingQuery: '',
     scan: null, setPage: null, reelView: 'feed'
   };
@@ -295,6 +295,7 @@ try {
 const OWNER_COLUMN = 'auth_user_id';
 let accountGeneration = 0;
 let pantryRequest = 0;
+let wasteRequest = 0;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
 let chatLoadRequest = 0;
@@ -343,6 +344,31 @@ async function loadPantry() {
   if (error) { sync = 'error'; console.error('[MyPantry] load failed', error); toast(`Couldn't load your pantry: ${esc(error.message)}`, null, 'alert'); render(); return; }
   S.inv = data.map(rowToItem); sync = 'synced';
   render();
+}
+async function loadWasteEvents() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++wasteRequest;
+  S.wasteStatus = 'loading';
+  const events = [];
+  try {
+    for (let start = 0; ; start += 500) {
+      const { data, error } = await sb.from('food_waste_events')
+        .select('event_id,user_id,source_ingredient_id,ingredient_name,food_type,quantity,measurement,reason,occurred_at')
+        .eq('user_id', owner).order('occurred_at', { ascending: false }).range(start, start + 499);
+      if (generation !== accountGeneration || request !== wasteRequest) return;
+      if (error) throw error;
+      events.push(...data);
+      if (data.length < 500) break;
+    }
+    S.wasteEvents = events;
+    S.wasteStatus = 'synced';
+  } catch (error) {
+    if (generation !== accountGeneration || request !== wasteRequest) return;
+    S.wasteStatus = 'error';
+    console.error('[MyPantry] food waste load failed', error);
+  }
+  if (S.tab === 'ing') render();
+  if ($('#wasteHistorySheet')) openSheet(wasteHistorySheet());
 }
 const stateKey = () => S.user?.id ? `mp_state_v2:${S.user.id}` : null;
 function persist() {
@@ -1252,6 +1278,101 @@ function subBlock(r) {
 /* ===========================================================
    INGREDIENTS
    =========================================================== */
+const WASTE_REASONS = { spoiled: 'Spoiled', past_date: 'Past its date', unused: 'No longer needed', other: 'Other' };
+const wasteNumber = value => value !== 0 && Math.abs(value) < 0.000001
+  ? Number(value).toExponential(2)
+  : new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 }).format(value);
+function wasteDisplay(quantity, unit) {
+  if (S.metric && CONV[unit]) {
+    const [shownUnit, factor] = CONV[unit];
+    const converted = Number(quantity) * factor;
+    return [Math.round(converted * 10000) / 10000 || converted, shownUnit];
+  }
+  return [Number(quantity), unit];
+}
+function wasteQtyText(quantity, unit) {
+  const [value, shownUnit] = wasteDisplay(quantity, unit);
+  return `${wasteNumber(value)} ${shownUnit === 'ct' ? 'count' : shownUnit}`;
+}
+function wasteMonthEvents() {
+  const now = new Date();
+  return S.wasteEvents.filter(event => {
+    const date = new Date(event.occurred_at);
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  });
+}
+function wasteAmounts(events) {
+  let grams = 0, milliliters = 0;
+  const other = new Map();
+  for (const event of events) {
+    const quantity = Number(event.quantity), unit = event.measurement;
+    if (!(quantity > 0)) continue;
+    if (unit === 'g') grams += quantity;
+    else if (unit === 'kg') grams += quantity * 1000;
+    else if (unit === 'oz') grams += quantity * 28.35;
+    else if (unit === 'lb') grams += quantity * 453.6;
+    else if (unit === 'mL') milliliters += quantity;
+    else if (unit === 'L') milliliters += quantity * 1000;
+    else if (unit === 'fl oz') milliliters += quantity * 29.57;
+    else if (unit === 'gal') milliliters += quantity * 3785;
+    else other.set(unit, (other.get(unit) || 0) + quantity);
+  }
+  const amounts = [];
+  if (grams) amounts.push(S.metric
+    ? grams >= 1000 ? `${wasteNumber(grams / 1000)} kg` : `${wasteNumber(grams)} g`
+    : grams >= 453.6 ? `${wasteNumber(grams / 453.6)} lb` : `${wasteNumber(grams / 28.35)} oz`);
+  if (milliliters) amounts.push(S.metric
+    ? milliliters >= 1000 ? `${wasteNumber(milliliters / 1000)} L` : `${wasteNumber(milliliters)} mL`
+    : milliliters >= 3785 ? `${wasteNumber(milliliters / 3785)} gal` : `${wasteNumber(milliliters / 29.57)} fl oz`);
+  for (const [unit, amount] of other) amounts.push(`${wasteNumber(amount)} ${unit === 'ct' ? 'count' : unit}`);
+  return amounts;
+}
+function wasteCard() {
+  const events = wasteMonthEvents();
+  const amounts = wasteAmounts(events);
+  const label = S.wasteStatus === 'loading' ? 'Loading waste history…'
+    : S.wasteStatus === 'error' ? 'Couldn’t load waste history'
+      : events.length ? `${plural(events.length, 'report')} this month` : 'No waste logged this month';
+  const detail = S.wasteStatus === 'synced' && amounts.length
+    ? `${esc(amounts.slice(0, 2).join(' · '))}${amounts.length > 2 ? ` · +${amounts.length - 2} more` : ''}`
+    : 'Track what gets thrown away';
+  return `<button class="waste-card" data-act="wasteHistory" aria-label="Food waste, ${esc(label)}. View history">
+    <span class="waste-card-head"><span class="waste-card-title">Food waste</span><span class="waste-card-link">View history ›</span></span>
+    <span class="waste-card-count">${esc(label)}</span><span class="waste-card-amount">${detail}</span>
+  </button>`;
+}
+function wasteHistorySheet() {
+  const events = wasteMonthEvents(), amounts = wasteAmounts(events);
+  const intro = S.wasteStatus === 'loading' ? '<div class="waste-empty">Loading waste history…</div>'
+    : S.wasteStatus === 'error' ? '<div class="waste-empty">Waste history could not be loaded. Try again.</div><button class="btn btn-soft" data-act="wasteRetry">Try again</button>'
+      : `<div class="waste-empty">${events.length ? `${plural(events.length, 'report')} this month${amounts.length ? ` · ${esc(amounts.join(' · '))}` : ''}` : 'No waste logged this month'}</div>`;
+  const rows = S.wasteEvents.map(event => `<div class="waste-row">
+    <div class="waste-row-main"><span class="waste-row-name">${esc(event.ingredient_name)}</span>
+      <span class="waste-row-meta">${esc(WASTE_REASONS[event.reason] || 'Other')} · ${esc(new Date(event.occurred_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))}</span></div>
+    <span class="waste-row-qty">${esc(wasteQtyText(event.quantity, event.measurement))}</span>
+  </div>`).join('');
+  return `<div class="sheet-head"><h2>Food waste</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body" id="wasteHistorySheet"><p>Amounts are grouped by weight, volume, and item type.</p>${intro}
+      ${S.wasteStatus === 'synced' ? rows ? `<div class="waste-list">${rows}</div>` : '<div class="waste-empty">No food waste has been logged yet. Open an ingredient to log what you threw away.</div>' : ''}</div>`;
+}
+function wasteForm(it) {
+  const [quantity, unit] = wasteDisplay(it.qty, it.unit);
+  return `<div class="sheet-head"><h2>Log food waste</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <form class="sheet-body" id="wasteForm" data-id="${esc(it.id)}" novalidate>
+      <p>How much ${esc(it.name)} did you throw away? We’ll remove that amount from Ingredients and save it to your waste history.</p>
+      <div class="field"><label for="wasteQty">Amount wasted (${esc(unit === 'ct' ? 'count' : unit)})</label>
+        <input class="input num" id="wasteQty" type="number" min="0" max="${quantity}" step="any" inputmode="decimal" value="${quantity}" autofocus>
+        <span class="field-err" id="wasteQtyErr" hidden>Enter an amount greater than zero and no more than ${quantity}.</span></div>
+      <div class="field"><label for="wasteReason">Why was it wasted?</label><select class="input" id="wasteReason">
+        <option value="">Choose a reason</option>${Object.entries(WASTE_REASONS).map(([code, label]) => `<option value="${code}">${label}</option>`).join('')}</select>
+        <span class="field-err" id="wasteReasonErr" hidden>Choose a reason.</span></div>
+    </form><div class="sheet-foot"><button class="btn btn-primary" data-act="wasteSave" id="wasteSaveBtn">Save waste</button>
+      <button class="btn btn-ghost" data-act="closeSheet">Cancel</button></div>`;
+}
+function openWasteForm(it) {
+  openSheet(wasteForm(it));
+  $('#wasteForm').addEventListener('submit', event => { event.preventDefault(); ACT.wasteSave(); });
+}
 function renderIng() {
   const n = S.inv.length;
   const soonCount = S.inv.filter(i => daysLeft(i) <= 7).length;
@@ -1271,7 +1392,7 @@ function renderIng() {
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
     ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Going bad soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
-    <div class="scroll">${content}<div style="height:90px"></div></div>
+    <div class="scroll">${wasteCard()}${content}<div style="height:90px"></div></div>
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
 function syncChip() {
@@ -1335,7 +1456,8 @@ function itemForm(it, mode) {
   </form>
   <div class="sheet-foot">
     <button class="btn btn-primary" data-act="saveItem" id="saveItemBtn">${saveLabel}</button>
-    ${mode === 'edit' ? `<button class="btn btn-danger-ghost" data-act="deleteItem" data-arg="${it.id}">${ic('trash')} Delete item</button>` : ''}
+    ${mode === 'edit' ? `<button class="btn btn-soft" data-act="wasteStart" data-arg="${it.id}">${ic('trash')} Log waste</button>
+      <button class="btn btn-danger-ghost" data-act="deleteItem" data-arg="${it.id}">${ic('trash')} Delete item</button>` : ''}
   </div>`;
 }
 function openItemForm(it, mode) {
@@ -2243,6 +2365,52 @@ const ACT = {
   ingView(arg) { S.ingView = arg; render(); },
   ingCat(arg) { S.ingCat = arg; render(); },
   edit(id) { const it = S.inv.find(i => i.id === id); if (it) openItemForm(it, 'edit'); },
+  wasteHistory() { openSheet(wasteHistorySheet()); },
+  wasteRetry() { void loadWasteEvents(); },
+  wasteStart(id) { const it = S.inv.find(i => i.id === id); if (it) openWasteForm(it); },
+  async wasteSave() {
+    const form = $('#wasteForm'), button = $('#wasteSaveBtn');
+    if (!form || !button || button.disabled) return;
+    const it = S.inv.find(item => item.id === form.dataset.id);
+    if (!it?.dbId || !sb || !S.user?.id) return;
+    const text = $('#wasteQty').value.trim();
+    const displayed = wasteDisplay(it.qty, it.unit)[0];
+    const entered = Number(text);
+    const reason = $('#wasteReason').value;
+    const quantityValid = text !== '' && Number.isFinite(entered) && entered > 0 && entered <= displayed;
+    $('#wasteQtyErr').hidden = quantityValid;
+    $('#wasteQty').classList.toggle('bad', !quantityValid);
+    $('#wasteReasonErr').hidden = !!WASTE_REASONS[reason];
+    $('#wasteReason').classList.toggle('bad', !WASTE_REASONS[reason]);
+    if (!quantityValid || !WASTE_REASONS[reason]) return;
+    const converted = S.metric && CONV[it.unit] ? entered / CONV[it.unit][1] : entered;
+    const quantity = entered === displayed ? it.qty : Math.min(it.qty, Number(converted.toPrecision(12)));
+    if (!(quantity > 0)) { $('#wasteQtyErr').hidden = false; return; }
+    const owner = S.user.id, generation = accountGeneration;
+    button.disabled = true; button.textContent = 'Saving…';
+    ++pantryRequest; ++wasteRequest; sync = 'saving';
+    try {
+      const { data, error } = await sb.rpc('record_food_waste', {
+        p_ingredient_id: it.dbId, p_quantity: quantity, p_reason: reason
+      });
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      if (error) throw error;
+      const remaining = Number(data?.remaining_quantity), event = data?.event;
+      if (!event || event.user_id !== owner || !Number.isFinite(remaining) || remaining < 0) throw new Error('The database did not confirm the saved amount.');
+      if (remaining === 0) S.inv = S.inv.filter(item => item.id !== it.id);
+      else it.qty = remaining;
+      S.wasteEvents.unshift(event); S.wasteStatus = 'synced'; sync = 'synced';
+      closeSheet(); render(); toast(`Logged ${esc(it.name)} as waste`, null, 'check');
+      void loadWasteEvents();
+    } catch (error) {
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      console.error('[MyPantry] food waste save failed', error);
+      sync = 'error';
+      closeSheet();
+      toast('Couldn’t confirm the waste log. Check your pantry and waste history before trying again.', null, 'alert');
+      void loadPantry(); void loadWasteEvents();
+    }
+  },
   async saveItem() {
     const f = $('#itemForm'); if (!f) return;
     const data = readItemForm(); if (!data) return;
@@ -2481,7 +2649,7 @@ function enterApp() {
   void loadRemoteRecipes();
   S.auth = 'app'; S.chat = []; render();
   startAppSessionTracking();
-  loadPantry(); loadUserAppState(); loadChatHistory();
+  loadPantry(); loadWasteEvents(); loadUserAppState(); loadChatHistory();
 }
 
 /* ---------- Event wiring ---------- */
@@ -2712,7 +2880,3 @@ demoToggle.addEventListener('click', () => toggleDemoTools(!demoPanel.classList.
 S.inv = []; S.auth = auth ? 'loading' : 'login'; render();
 if (auth) auth.start();
 })();
-
-
-
-
