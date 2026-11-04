@@ -397,7 +397,7 @@ function hydrate() {
       if (['home', 'ing', 'scan', 'reels', 'settings'].includes(nav.tab)) S.tab = nav.tab;
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
-      if (['feed', 'ready', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
+      if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
       if (['deals', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
@@ -1886,53 +1886,55 @@ function rankReels() {
   const rest = others.filter(x => !isNear(x)).sort((a, b) => a.seen - b.seen || b.have - a.have || score(b.r) - score(a.r));
   return { can: can.map(r => r.id), near: near.map(x => x.r.id), rest: rest.map(x => x.r.id) };
 }
-// Feed entries are recipe ids, plus "card:<kind>" section cards that explain what comes next.
+// Feed entries are recipe ids, plus "card:<kind>" cards. By default the feed shows only
+// recipes you can make; "Show more recipes" adds the ones that need more ingredients,
+// closest first.
 function feedEntries(rank) {
-  if (S.reelView === 'ready') return rank.can;
-  const out = [...rank.can];
-  if (rank.near.length) out.push(rank.can.length ? 'card:near' : 'card:none-near', ...rank.near);
-  if (rank.rest.length) out.push(...(S.reelExplore ? ['card:more', ...rank.rest] : ['card:explore']));
-  else out.push('card:end');
-  return out;
+  const extra = [...rank.near, ...rank.rest];
+  if (!S.reelMore) return rank.can.length && extra.length ? [...rank.can, 'card:offer'] : [...rank.can];
+  return [...rank.can, ...(extra.length ? ['card:more', ...extra] : []), 'card:end'];
 }
 function reelSeg() {
   const n = S.saved.size, v = S.reelView || 'feed';
   const tab = (key, label) => `<button role="tab" class="${v === key ? 'on' : ''}" aria-selected="${v === key}" data-act="reelView" data-arg="${key}">${label}</button>`;
-  return `<div class="reel-seg" role="tablist" aria-label="Reels view">${tab('feed', 'For you')}${tab('ready', 'Can make')}${tab('saved', `Saved${n ? ` <span class="num">${n}</span>` : ''}`)}</div>`;
+  return `<div class="reel-seg" role="tablist" aria-label="Reels view">${tab('feed', 'For you')}${tab('saved', `Saved${n ? ` <span class="num">${n}</span>` : ''}`)}</div>`;
 }
+const MORE_BTN = 'Show recipes that need more ingredients';
 function renderReels() {
   if (S.reelView === 'saved') return renderSaved();
   const rank = rankReels();
   reelOrder = feedEntries(rank);
   const addBtn = `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`;
+  const hasExtra = rank.near.length + rank.rest.length > 0;
   if (!reelOrder.length) {
     return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
       <div class="reels-empty"><div><div class="big-illus">🍳</div><p>You don't have enough ingredients to make anything yet. Try adding more food to your pantry</p>
-      <div class="reels-empty-btns">${addBtn}${rank.near.length ? `<button class="btn btn-sm reel-ghost-btn" data-act="reelView" data-arg="feed">See recipes you're close to</button>` : ''}</div></div></div></div>`;
+      <div class="reels-empty-btns">${addBtn}${hasExtra ? `<button class="btn btn-sm reel-ghost-btn" data-act="reelMore" data-arg="on">${MORE_BTN}</button>` : ''}</div></div></div></div>`;
   }
   S.reelShown = Math.min(reelOrder.length, Math.max(REEL_BATCH, S.reelShown || 0));
   const summary = rank.can.length ? `${plural(rank.can.length, 'recipe')} you can make now` : 'Nothing you can make yet';
+  const toggle = S.reelMore && hasExtra
+    ? `<button class="reel-add" data-act="reelMore" data-arg="off">${ic('x')} Hide recipes I can't make</button>`
+    : '';
   return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1>
-      <div class="sub reel-count">${summary}${rank.can.length ? '' : ` <button class="reel-add" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`}</div>
+      <div class="sub reel-count">${summary}${toggle ? ` ${toggle}` : ''}</div>
       <div class="sub" id="learnChip">${learnText()}</div></div>${reelSeg()}</div>
     <div class="reel-feed" id="reelFeed">${reelOrder.slice(0, S.reelShown).map(entryHtml).join('')}</div></div>`;
 }
 const entryHtml = e => e.startsWith('card:') ? reelCard(e.slice(5)) : (R(e) ? reelHtml(R(e)) : '');
 function reelCard(kind) {
+  const W = 'background:#fff;color:#111';
   const C = {
-    near: ['🛒', "That's everything you can make right now", "Next up: recipes you're only 1 or 2 ingredients away from. Each one shows what's missing."],
-    'none-near': ['🛒', "You can't make a full recipe yet", "These are recipes you're only 1 or 2 ingredients away from. Each one shows what's missing."],
-    explore: ['🧭', "You've seen every recipe that fits your pantry", 'Want more ideas? The rest of the catalog needs several things you don\'t have yet.'],
-    more: ['🧭', 'More recipes to explore', 'These need several ingredients you don\'t have. Save any you like for your next grocery trip.'],
-    end: ['✅', "You're all caught up", 'New reels show up as your pantry changes.']
+    offer: ['✅', "That's everything you can make right now", 'Want more ideas? See recipes you could make with a few more ingredients, closest first.',
+      `<button class="btn btn-sm" style="${W}" data-act="reelMore" data-arg="on">${MORE_BTN}</button>`],
+    more: ['🛒', 'Recipes that need more ingredients', "Sorted by how close you are. Each one shows what's missing. Save any you like for your next grocery trip.",
+      '<div class="reel-card-hint">Swipe up</div>'],
+    end: ['✅', "You're all caught up", 'New reels show up as your pantry changes.',
+      `<button class="btn btn-sm" style="${W}" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`]
   }[kind];
   if (!C) return '';
-  const btns = kind === 'explore'
-    ? `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="reelExplore">Explore more recipes</button>`
-    : kind === 'end' ? `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>` : '';
   return `<article class="reel reel-card" data-id="card-${kind}" aria-label="${esc(C[1])}">
-    <div class="reel-card-in"><div class="reel-card-em" aria-hidden="true">${C[0]}</div><h2>${esc(C[1])}</h2><p>${esc(C[2])}</p>${btns}
-    ${kind === 'near' || kind === 'none-near' || kind === 'more' ? '<div class="reel-card-hint">Swipe up</div>' : ''}</div></article>`;
+    <div class="reel-card-in"><div class="reel-card-em" aria-hidden="true">${C[0]}</div><h2>${esc(C[1])}</h2><p>${esc(C[2])}</p>${C[3]}</div></article>`;
 }
 function renderSaved() {
   const list = [...S.saved].map(R).filter(Boolean);
@@ -2215,7 +2217,7 @@ const ACT = {
     closeSheet();
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelExplore = false; }
+    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; }
     S.tab = arg; render();
   },
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
@@ -2355,10 +2357,14 @@ const ACT = {
     toast('Removed from your saved recipes', () => { S.saved.add(id); persist(); render(); }, 'bookmark');
   },
   reelView(arg) { S.reelView = arg; S.reelShown = 0; render(); },
-  reelExplore() {
+  reelMore(arg) {
+    const on = arg !== 'off';
     const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0;
-    S.reelExplore = true; S.reelShown = (S.reelShown || 0) + REEL_BATCH; render();
-    const f2 = $('#reelFeed'); if (f2) { f2.scrollTop = st; const c = f2.querySelector('[data-id="card-more"]'); if (c) f2.scrollTo({ top: c.offsetTop, behavior: 'smooth' }); }
+    S.reelMore = on; S.reelShown = on ? (S.reelShown || 0) + REEL_BATCH : 0; render();
+    const f2 = $('#reelFeed'); if (!f2) return;
+    if (!on) { f2.scrollTop = 0; return; }
+    f2.scrollTop = st;
+    const c = f2.querySelector('[data-id="card-more"]'); if (c) f2.scrollTo({ top: c.offsetTop, behavior: 'smooth' });
   },
   openSaved() { S.tab = 'reels'; S.reelView = 'saved'; render(); },
   askMissing(id) {
