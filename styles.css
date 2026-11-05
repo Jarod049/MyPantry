@@ -444,6 +444,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .modal .icon-hero svg { width: 28px; height: 28px; }
 @keyframes pop { from { transform: scale(.94); opacity: 0; } }
 .est-note { display: flex; gap: 8px; font-size: 12.5px; background: var(--sky-soft); color: var(--sky); padding: 9px 11px; border-radius: 10px; font-weight: 500; }
+.est-note[hidden] { display: none; }
 .est-note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
 
 .toast {
