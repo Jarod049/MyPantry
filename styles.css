@@ -686,6 +686,8 @@ button.set-row:hover { background: var(--surface-2); }
 .shop-empty .btn { margin-top: 12px; }
 .shop-offers { margin-bottom: 28px; }
 .shop-offer-card a { text-decoration: none; }
+.shop-offer-card .shop-fallback { margin-top: 8px; }
+.shop-offer-card .shop-link-help { margin: 10px 0 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

@@ -278,7 +278,7 @@ function freshState() {
     prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     ingView: 'all', ingCat: 'All', ingQuery: '',
-    scan: null, setPage: null, reelView: 'feed', shopRecipeId: null
+    scan: null, setPage: null, reelView: 'feed', shopRecipeId: null, shopReturnTab: null
   };
 }
 S = freshState();
@@ -2286,7 +2286,10 @@ function shareSheet(r) {
 const STORES = ["Smith's", 'Walmart', 'Harmons', 'Costco', "Sprouts"];
 // These are retailer-owned offer pages. MyPantry does not receive their prices or stock.
 const STORE_OFFER_LINKS = {
-  "Smith's": { url: 'https://www.smithsfoodanddrug.com/weeklyad/weeklyad', label: 'weekly ad' },
+  "Smith's": {
+    url: 'https://www.smithsfoodanddrug.com/weeklyad', label: 'weekly ad',
+    fallbackUrl: 'https://www.smithsfoodanddrug.com/savings/', fallbackLabel: 'Smith\'s savings page'
+  },
   Walmart: { url: 'https://www.walmart.com/shop/deals/instore', label: 'in-store deals' },
   Harmons: { url: 'https://shop.harmonsgrocery.com/store/harmons/flyers/view/weekly/print', label: 'weekly ad' },
   Costco: { url: 'https://www.costco.com/o/-/warehouse-savings', label: 'warehouse savings' },
@@ -2404,6 +2407,7 @@ function renderDeals() {
   const needs = plan ? shopNeeds(plan) : [];
   const otherChoices = choices.filter(option => option.r.id !== plan?.id).slice(0, 3);
   const offer = Object.hasOwn(STORE_OFFER_LINKS, S.store) ? STORE_OFFER_LINKS[S.store] : null;
+  const returnLabel = { home: 'Home', ing: 'Ingredients', scan: 'Scan food', reels: 'Reels', settings: 'Settings' }[S.shopReturnTab] || 'Settings';
   const planHtml = !pantryReady ? `<div class="shop-empty" role="status">${sync === 'error' ? 'Your pantry could not be loaded, so shopping ideas are paused. Try again before deciding what to buy.' : 'Waiting for your pantry to sync before suggesting ingredients…'}${sync === 'error' ? '<button class="btn btn-ghost" data-act="shopRetry">Try loading pantry again</button>' : ''}</div>`
     : plan ? `<div class="shop-plan-card">
       <div class="shop-plan-title"><span aria-hidden="true">${esc(plan.emoji || '🍽️')}</span><div><b>${esc(plan.name)}</b><small>${plan.ing.length - needs.length} of ${plan.ing.length} ingredients match pantry items whose listed dates have not passed</small></div></div>
@@ -2414,7 +2418,7 @@ function renderDeals() {
   const optionsHtml = otherChoices.map(option => `<button class="shop-recipe-choice" data-act="shopPlan" data-arg="${esc(option.r.id)}" aria-label="Plan ${esc(option.r.name)}">
       <span aria-hidden="true">${esc(option.r.emoji || '🍽️')}</span><span><b>${esc(option.r.name)}</b><small>${S.saved.has(option.r.id) ? 'Saved recipe · ' : ''}${plural(option.needs.length, 'ingredient')} to check</small></span>${ic('right')}
     </button>`).join('');
-  return `<div class="appbar" style="padding-bottom:6px"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
+  return `<div class="appbar" style="padding-bottom:6px"><button class="back" data-act="shopBack">${ic('left')} ${returnLabel}</button></div>
   <div class="scroll">
     <div class="shop-heading"><h1>Shop ideas</h1><p>Plan a meal with food you already have, then check your store's offers.</p></div>
     <div class="store-banner shop-store"><span>Preferred store</span><b>${esc(S.store)}</b><span>${S.zip ? `ZIP ${esc(S.zip)} saved in MyPantry` : 'Choose your location on the store website'}</span><button data-act="storeSheet">Change store or ZIP</button></div>
@@ -2422,7 +2426,7 @@ function renderDeals() {
     ${optionsHtml ? `<div class="set-group"><span class="lbl">Other meals to plan</span><div class="set-card">${optionsHtml}</div></div>` : ''}
     <div class="set-group shop-offers"><span class="lbl">Current store offers</span><div class="shop-offer-card">
       <b>${offer ? `Check ${esc(S.store)} directly` : 'Choose a supported store'}</b><p>MyPantry does not have live prices or stock. Choose your local store on the retailer's site to see its current offers and availability.</p>
-      ${offer ? `<a class="btn btn-primary" href="${offer.url}" target="_blank" rel="noopener noreferrer">Open ${esc(S.store)} ${esc(offer.label)} ↗</a>` : '<button class="btn btn-primary" data-act="storeSheet">Choose a store</button>'}
+      ${offer ? `<a class="btn btn-primary" href="${offer.url}" target="_blank" rel="noopener noreferrer">Open ${esc(S.store)} ${esc(offer.label)} ↗</a>${offer.fallbackUrl ? `<a class="btn btn-ghost shop-fallback" href="${offer.fallbackUrl}" target="_blank" rel="noopener noreferrer">Open ${esc(offer.fallbackLabel)} ↗</a><p class="shop-link-help">If Smith's blocks the weekly ad, try its savings page or open Smith's directly in your browser or app. You may need to sign in and choose your local store.</p>` : ''}` : '<button class="btn btn-primary" data-act="storeSheet">Choose a store</button>'}
     </div></div>
   </div>`;
 }
@@ -2489,6 +2493,7 @@ const ACT = {
   enterApp() { enterApp(); },
   tab(arg) {
     closeSheet();
+    S.shopReturnTab = null;
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
     if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; }
@@ -2690,7 +2695,9 @@ const ACT = {
   askMissing(id) { ACT.shopForRecipe(id); },
   shopForRecipe(id) {
     if (!R(id)) return;
-    closeSheet(); S.shopRecipeId = id; S.tab = 'settings'; S.setPage = 'deals'; render();
+    closeSheet(); S.shopRecipeId = id;
+    if (S.tab !== 'settings' || S.setPage !== 'deals') S.shopReturnTab = S.tab;
+    S.tab = 'settings'; S.setPage = 'deals'; render();
   },
   shopPlan(id) {
     if (!R(id)) return;
@@ -2738,8 +2745,9 @@ const ACT = {
     if (!STORES.includes(store)) return toast('Choose a store to save.', null, 'alert');
     S.store = store; S.zip = z; persist(); closeSheet(); render(); toast(`Shopping preference saved: ${esc(S.store)}`, null, 'store');
   },
-  deals() { S.shopRecipeId = null; S.tab = 'settings'; S.setPage = 'deals'; render(); },
-  dealsBack() { S.shopRecipeId = null; S.setPage = null; render(); },
+  deals() { S.shopRecipeId = null; S.shopReturnTab = S.tab; S.tab = 'settings'; S.setPage = 'deals'; render(); },
+  shopBack() { S.shopRecipeId = null; S.setPage = null; S.tab = S.shopReturnTab || 'settings'; S.shopReturnTab = null; render(); },
+  dealsBack() { S.setPage = null; render(); },
   shopRetry() { sync = 'loading'; render(); void loadPantry(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
   async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
