@@ -278,7 +278,7 @@ function freshState() {
     prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     ingView: 'all', ingCat: 'All', ingQuery: '',
-    scan: null, setPage: null, reelView: 'feed'
+    scan: null, setPage: null, reelView: 'feed', shopRecipeId: null
   };
 }
 S = freshState();
@@ -412,7 +412,8 @@ async function loadRemoteRecipes() {
     if (error) throw error;
     if (!Array.isArray(data) || !data.length) return;
     addRecipes(data.map(rowToRecipe));
-    if (S.auth === 'app' && S.tab === 'reels' && S.reelView !== 'saved' && !$('#reelFeed')?.scrollTop) render();
+    if (S.auth === 'app' && ((S.tab === 'reels' && S.reelView !== 'saved' && !$('#reelFeed')?.scrollTop)
+      || (S.tab === 'settings' && S.setPage === 'deals'))) render();
   } catch (error) {
     remoteRecipesLoaded = false;
     console.warn('[MyPantry] recipe catalog unavailable, using built-in reels', error);
@@ -733,8 +734,8 @@ function applySession(session, event) {
 }
 
 /* ---------- Inventory logic ---------- */
-const findItems = m => { const keys = altsOf(m); return S.inv.filter(i => i.qty > 0 && keys.some(k => i.name.toLowerCase().includes(k))).sort(byExp); };
-const has = m => findItems(m).length > 0;
+const findItems = m => matchingFoodItems(m);
+const has = m => findItems(m).some(item => daysLeft(item) >= 0);
 const canMake = r => r.ing.every(g => has(g.m));
 function missingOf(r) { return r.ing.filter(g => !has(g.m)); }
 function canMakeWithSub(r) {
@@ -760,7 +761,7 @@ function useRecipe(r) {
   const log = [];
   r.ing.forEach(g => {
     let need = g.a;
-    for (const it of findItems(g.m)) {
+    for (const it of findItems(g.m).filter(item => daysLeft(item) >= 0)) {
       if (need <= 0) break;
       const take = Math.min(it.qty, need);
       const from = it.qty;
@@ -1118,7 +1119,7 @@ function renderHome() {
   return `<div class="chat-head"><div class="bot-av">${ic('spark')}</div><div><h1>Pantry Pal</h1><div class="sub">AI assistant · history saved to your account</div></div>
       <button class="icon-btn" data-act="newChat" aria-label="Start a new chat">${ic('refresh')}</button></div>
     <div class="scroll" id="chatScroll"><div class="chat" id="chat" aria-live="polite">${S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join('')}</div></div>
-    <div class="chips" aria-label="Suggestions">${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+    <div class="chips" aria-label="Suggestions"><button class="chip" data-act="deals">🛒 Shop ideas</button>${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
     <form class="composer" id="chatForm"><input class="input" id="chatIn" maxlength="2000" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
 }
 function pushMsg(who, html) {
@@ -1195,8 +1196,6 @@ function lookup(term) {
   const words = term.split(' ').map(w => w.replace(/(es|s)$/, '')).filter(w => w.length >= 3);
   return S.inv.filter(i => { const n = i.name.toLowerCase(); return n.includes(term) || words.some(w => n.includes(w)); }).sort(byExp);
 }
-function dealFor(term) { return DEALS.find(d => term && d.name.toLowerCase().includes(term.split(' ')[0].replace(/s$/, ''))); }
-
 const CUISINES = { chinese: 'Chinese', asian: 'Chinese', 'stir fry': 'Chinese', italian: 'Italian', pasta: 'Italian', mexican: 'Mexican', taco: 'Mexican', breakfast: 'Breakfast', brunch: 'Breakfast', american: 'American', comfort: 'American', japanese: 'Japanese', sushi: 'Japanese', thai: 'Thai', indian: 'Indian', greek: 'Greek', korean: 'Korean' };
 
 async function reply(text) {
@@ -1228,7 +1227,7 @@ async function reply(text) {
     if (found.length) {
       return `<p>Here's what I see for <b>${esc(term)}</b>:</p>${found.map(i => {
         const d = daysLeft(i);
-        const verdict = d < 0 ? `passed its date on ${fmtDate(i.exp)}. Smell and check it before using, or toss it.` : d <= 2 ? `is still good, but use it by ${fmtDate(i.exp)}.` : `is good until ${fmtDate(i.exp)}.`;
+        const verdict = d < 0 ? `passed its listed date on ${fmtDate(i.exp)}. Check storage guidance before using it.` : `has a listed date of ${fmtDate(i.exp)}. A date alone cannot confirm food safety.`;
         return `<p>${i.emoji || '📦'} <b>${esc(i.name)}</b> (${qtyText(i.qty, i.unit)}) ${verdict}</p>`;
       }).join('')}${found.length > 1 ? '<p>Use the one that spoils first.</p>' : ''}${found.some(i => daysLeft(i) < 0) ? `<div class="actions"><button class="btn btn-danger btn-sm" data-act="removeItem" data-arg="${found.find(i => daysLeft(i) < 0).id}">Remove the spoiled one</button></div>` : ''}`;
     }
@@ -1239,12 +1238,11 @@ async function reply(text) {
     const term = termFrom(t.replace(/(do i have|do we have|have any|got any|how much|how many|is there|should i buy|need to buy|am i out of)/g, ''));
     const found = lookup(term);
     if (found.length) {
-      const total = found.map(i => `${qtyText(i.qty, i.unit)} (${status(daysLeft(i)).label.toLowerCase()}, ${spoilText(i).toLowerCase()})`).join(' and ');
-      const allBad = found.every(i => daysLeft(i) < 0);
-      return `<p>${found[0].emoji || '📦'} Yes, you have <b>${esc(found[0].name)}</b>: ${total}.</p><p>${allBad ? 'It has gone bad, so go ahead and buy more.' : 'No need to buy more right now.'}</p>`;
+      const total = found.map(i => `${qtyText(i.qty, i.unit)} (listed date ${fmtDate(i.exp)})`).join(' and ');
+      const allPastDate = found.every(i => daysLeft(i) < 0);
+      return `<p>${found[0].emoji || '📦'} Your pantry lists <b>${esc(found[0].name)}</b>: ${total}.</p><p>${allPastDate ? 'All matching items passed their listed dates. Check them before using or buying replacements.' : 'Check quantities and dates before deciding whether to buy more.'}</p>`;
     }
-    const deal = dealFor(term);
-    return `<p>You're out of <b>${esc(term || 'that')}</b>. It's safe to buy.</p>${deal ? `<p>${deal.emoji} It's on sale at ${esc(S.store)} this week: <b>$${price(deal.p)}</b> (was $${price(deal.was)}).</p>` : ''}`;
+    return `<p>I don't see <b>${esc(term || 'that')}</b> on your pantry list. Check at home before buying more.</p><div class="actions"><button class="btn btn-ghost btn-sm" data-act="deals">See shop ideas</button></div>`;
   }
 
   if (/(expir|going bad|spoil|go bad|use up|use first|about to|going off)/.test(t)) {
@@ -2152,20 +2150,21 @@ function reelCard(kind) {
 }
 function renderSaved() {
   const list = [...S.saved].map(R).filter(Boolean);
+  const pantryReady = sync === 'synced';
   const body = !list.length
     ? `<div class="reels-empty"><div><div class="big-illus">🔖</div><p>No saved recipes yet.</p><span class="saved-hint">Tap Save on any reel and it will show up here, even after you use up the ingredients.</span>
         <button class="btn btn-sm" style="background:#fff;color:#111" data-act="reelView" data-arg="feed">Browse reels</button></div></div>`
     : `<div class="saved-list">${list.map(r => {
-        const miss = missingOf(r);
-        const ok = !miss.length;
+        const miss = pantryReady ? shopNeeds(r) : [];
+        const ok = pantryReady && !miss.length;
         return `<div class="saved-card">
           <button class="saved-main" data-act="recipe" data-arg="${r.id}" aria-label="Open ${esc(r.name)}">
             <span class="saved-thumb" style="background:${r.bg}">${r.emoji}</span>
             <span class="saved-txt"><b>${esc(r.name)}</b><span>${r.time} min · Easy · ${r.type}</span>
-              <span class="saved-status ${ok ? 'can' : 'cant'}">${ok ? `${ic('check')} You can make this now` : `Missing ${esc(miss.map(g => ingName(g.m)).join(', '))}`}</span></span>
+              <span class="saved-status ${ok ? 'can' : 'cant'}">${!pantryReady ? 'Pantry unavailable; check again soon' : ok ? `${ic('check')} Ingredients appear to be on hand` : `Check ${esc(miss.map(({ ingredient }) => needName(ingredient)).join(', '))}`}</span></span>
           </button>
           <div class="saved-actions">
-            ${ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Check store deals</button>`}
+            ${pantryReady ? ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Shop ingredients</button>` : ''}
             <button class="sa-ghost" data-act="unsave" data-arg="${r.id}" aria-label="Remove ${esc(r.name)} from saved">${ic('trash')} Remove</button>
           </div></div>`;
       }).join('')}</div>`;
@@ -2246,21 +2245,25 @@ function mountReels() {
 function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.io.disconnect(); $('#reelFeed')?.removeEventListener('scroll', reelCtl.more); reelCtl = null; } }
 
 function recipeSheet(r) {
-  const canUse = canMake(r);
+  const pantryReady = sync === 'synced';
+  const shopNeeded = pantryReady && shopNeeds(r).length > 0;
+  const canUse = pantryReady && canMake(r) && !shopNeeded;
   return `<div class="sheet-head"><h2>${esc(r.name)}</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body">
     <div class="recipe-hero" style="background:${r.bg}">${r.emoji}</div>
     <div class="tagrow"><span class="tag">⏱ ${r.time} min</span><span class="tag">Easy</span><span class="tag">${r.type}</span><span class="tag">Serves ${r.serves}</span></div>
     <div><div class="lbl" style="margin-bottom:4px">Ingredients ${canUse ? `· you have all ${r.ing.length}` : ''}</div>
     <ul class="ing-list">${r.ing.map(g => {
-      const it = findItems(g.m)[0];
-      const sub = !it && r.subs && r.subs[g.m];
-      return `<li><span class="em">${it ? (it.emoji || '📦') : '➖'}</span><span>${esc(g.label)}<span class="amt">${it ? `You have ${qtyText(findItems(g.m).reduce((s, x) => s + x.qty, 0), it.unit)}` : sub ? 'Missing. Use milk + butter instead' : 'Missing'}</span></span>${it ? pillFor(it) : '<span class="pill soon">Swap</span>'}</li>`;
+      const matches = pantryReady ? findItems(g.m) : [], it = matches.find(item => daysLeft(item) >= 0);
+      const checkDate = !it && matches.length > 0;
+      const sub = !it && !checkDate && r.subs && r.subs[g.m];
+      return `<li><span class="em">${it ? (it.emoji || '📦') : '➖'}</span><span>${esc(g.label)}<span class="amt">${!pantryReady ? 'Pantry not loaded' : it ? `Listed: ${qtyText(it.qty, it.unit)}${matches.length > 1 ? ' and more' : ''}` : checkDate ? 'Matching pantry food needs a date check' : sub ? 'Missing; see substitution below' : 'Not on your pantry list'}</span></span>${it ? pillFor(it) : `<span class="pill soon">${!pantryReady ? 'Wait' : checkDate ? 'Check' : 'Need'}</span>`}</li>`;
     }).join('')}</ul></div>
-    ${r.subs && !canUse ? `<div class="sub-card">${esc(Object.values(r.subs)[0].text)}</div>` : ''}
+    ${r.subs && pantryReady && !canUse ? `<div class="sub-card">${esc(Object.values(r.subs)[0].text)}</div>` : ''}
     <div><div class="lbl" style="margin-bottom:6px">Steps</div><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>
   </div>
   <div class="sheet-foot">${canUse ? `<button class="btn btn-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : ''}
+    ${shopNeeded ? `<button class="btn btn-soft" data-act="shopForRecipe" data-arg="${esc(r.id)}">Shop ingredients</button>` : ''}
     <button class="btn btn-ghost" data-act="save" data-arg="${r.id}">${S.saved.has(r.id) ? 'Saved to your library' : 'Save recipe'}</button></div>`;
 }
 function useSheet(r) {
@@ -2281,18 +2284,61 @@ function shareSheet(r) {
    SETTINGS
    =========================================================== */
 const STORES = ["Smith's", 'Walmart', 'Harmons', 'Costco', "Sprouts"];
-const STORE_MULT = { "Smith's": 1, 'Walmart': .94, 'Harmons': 1.12, 'Costco': .88, 'Sprouts': 1.06 };
-const DEALS = [
-  { name: 'Milk (2%), 1 gal', emoji: '🥛', p: 2.99, was: 3.79, key: 'milk', stock: 'In stock' },
-  { name: 'Heavy cream, 16 oz', emoji: '🥛', p: 2.49, was: 3.29, key: 'heavy cream', stock: 'In stock' },
-  { name: 'Ground beef, 1 lb', emoji: '🥩', p: 3.99, was: 5.49, key: 'ground beef', stock: 'Low stock' },
-  { name: 'Salmon fillet, 1 lb', emoji: '🐟', p: 8.99, was: 11.99, key: 'salmon', stock: 'In stock' },
-  { name: 'Strawberries, 1 lb', emoji: '🍓', p: 2.50, was: 3.99, key: 'strawberr', stock: 'In stock' },
-  { name: 'Caesar dressing, 12 oz', emoji: '🥗', p: 2.29, was: 3.19, key: 'caesar dressing', stock: 'In stock' },
-  { name: 'Avocados, 4 ct', emoji: '🥑', p: 3.00, was: 4.49, key: 'avocado', stock: 'Low stock' },
-  { name: 'Cheddar cheese, 8 oz', emoji: '🧀', p: 2.00, was: 3.49, key: 'cheddar', stock: 'In stock' }
-];
-const price = p => (p * (STORE_MULT[S.store] || 1)).toFixed(2);
+// These are retailer-owned offer pages. MyPantry does not receive their prices or stock.
+const STORE_OFFER_LINKS = {
+  "Smith's": { url: 'https://www.smithsfoodanddrug.com/weeklyad/weeklyad', label: 'weekly ad' },
+  Walmart: { url: 'https://www.walmart.com/shop/deals/instore', label: 'in-store deals' },
+  Harmons: { url: 'https://shop.harmonsgrocery.com/store/harmons/flyers/view/weekly/print', label: 'weekly ad' },
+  Costco: { url: 'https://www.costco.com/o/-/warehouse-savings', label: 'warehouse savings' },
+  Sprouts: { url: 'https://shop.sprouts.com/store/sprouts/flyers/view/weekly/print', label: 'weekly ad' }
+};
+function shopWords(value) {
+  return (String(value).toLowerCase().replace(/\([^)]*\)/g, '').match(/[a-z0-9]+/g) || []).map(word => {
+    if (word.length > 4 && word.endsWith('ies')) return word.slice(0, -3) + 'y';
+    if (word.length > 4 && /(ches|shes|xes|zes|oes)$/.test(word)) return word.slice(0, -2);
+    if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+    return word;
+  });
+}
+// Keep broad food names from matching a different product made with that food.
+const SHOP_EXCLUDES = {
+  chicken: ['broth', 'stock', 'soup', 'sauce', 'sausage', 'nugget'],
+  beef: ['broth', 'stock', 'soup', 'sauce', 'jerky'],
+  pork: ['broth', 'stock', 'soup', 'sauce', 'sausage'],
+  rice: ['cake', 'noodle', 'milk', 'flour', 'cereal'],
+  bread: ['crumb', 'flour', 'pudding'],
+  cream: ['cheese', 'soup', 'soda', 'ice'],
+  milk: ['chocolate', 'powder', 'shake'],
+  butter: ['peanut', 'almond', 'cashew', 'sunflower', 'cookie', 'cocoa']
+};
+function matchingFoodItems(m) {
+  const alternatives = altsOf(m).map(key => ({ words: shopWords(key), category: foodCategory(key) }));
+  return S.inv.filter(item => item.qty > 0 && alternatives.some(alt => {
+    const words = shopWords(item.name), category = foodCategory(item.name);
+    if (!alt.words.length || !words.some((_, at) => alt.words.every((word, offset) => words[at + offset] === word))) return false;
+    if (alt.category !== 'Other' && category !== 'Other' && alt.category !== category) return false;
+    if (alt.words.length === 1 && SHOP_EXCLUDES[alt.words[0]]?.some(word => words.includes(word))) return false;
+    return true;
+  })).sort(byExp);
+}
+function shopNeeds(r) {
+  return r.ing.flatMap(ingredient => {
+    const matching = findItems(ingredient.m);
+    if (matching.some(item => daysLeft(item) >= 0)) return [];
+    return [{ ingredient, checkExisting: matching.length > 0 }];
+  });
+}
+function shopRecipeChoices() {
+  const options = RECIPES.map(r => {
+    const needs = shopNeeds(r);
+    return { r, needs, owned: r.ing.length - needs.length };
+  }).filter(option => option.needs.length);
+  const byFit = (a, b) => a.needs.length - b.needs.length || b.owned - a.owned || score(b.r) - score(a.r) || a.r.name.localeCompare(b.r.name);
+  const saved = options.filter(option => S.saved.has(option.r.id)).sort(byFit);
+  const near = options.filter(option => !S.saved.has(option.r.id) && option.owned > 0 && option.needs.length <= 3).sort(byFit);
+  const other = options.filter(option => !S.saved.has(option.r.id) && !(option.owned > 0 && option.needs.length <= 3)).sort(byFit);
+  return [...saved, ...near, ...other].slice(0, 6);
+}
 function sw(id, on, label) { return `<span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''} aria-label="${label}"><span></span></span>`; }
 function renderAccountSettings(kind) {
   if (kind === 'email') return `<div class="appbar"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
@@ -2334,9 +2380,9 @@ function renderSettings() {
       ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Stay signed in', 'Sign out when using a shared device', '')}
     </div></div>
     <div class="set-group"><span class="lbl">Shopping</span><div class="set-card">
-      ${row('store', 'var(--basil-soft)', 'var(--basil)', 'Preferred store', `ZIP ${esc(S.zip)}`, `<span class="val">${esc(S.store)} ${chev}</span>`, 'storeSheet')}
+      ${row('store', 'var(--basil-soft)', 'var(--basil)', 'Preferred store', S.zip ? `ZIP ${esc(S.zip)}` : 'ZIP optional', `<span class="val">${esc(S.store)} ${chev}</span>`, 'storeSheet')}
       ${row('bookmark', 'var(--sky-soft)', 'var(--sky)', 'Saved recipes', `${plural(S.saved.size, 'recipe')} in your library`, chev, 'openSaved')}
-      ${row('tag', 'var(--tomato-soft)', 'var(--tomato)', "This week's deals", `${DEALS.length} deals at ${esc(S.store)}`, chev, 'deals')}
+      ${row('tag', 'var(--tomato-soft)', 'var(--tomato)', 'Shop ideas', `Recipe ingredients and ${esc(S.store)} offers`, chev, 'deals')}
     </div></div>
     <div class="set-group"><span class="lbl">Pantry</span><div class="set-card">
       ${row('refresh', 'var(--tomato-soft)', 'var(--tomato)', '<span style="color:var(--tomato)">Reset inventory</span>', 'Remove all food and reset Reels', chev, 'resetAsk')}
@@ -2351,27 +2397,41 @@ function renderSettings() {
   </div>`;
 }
 function renderDeals() {
-  const rows = DEALS.map(d => {
-    const own = S.inv.filter(i => i.name.toLowerCase().includes(d.key));
-    const unlock = RECIPES.find(r => !canMake(r) && missingOf(r).length === 1 && missingOf(r)[0].m === d.key);
-    const pairs = !own.length ? null : null;
-    let note = '';
-    if (own.length && own.some(i => daysLeft(i) >= 0)) note = `<div class="note have">You already have ${qtyText(own.reduce((s, i) => s + i.qty, 0), own[0].unit)} at home</div>`;
-    else if (unlock) note = `<div class="note idea">Unlocks ${esc(unlock.name)} with food you have</div>`;
-    return `<div class="deal"><span class="img">${d.emoji}</span><div><b>${esc(d.name)}</b><span class="stock">${d.stock}</span>${note}</div><div class="price"><b class="num">$${price(d.p)}</b><br><s class="num">$${price(d.was)}</s></div></div>`;
-  }).join('');
+  const pantryReady = sync === 'synced';
+  const choices = pantryReady ? shopRecipeChoices() : [];
+  const focused = pantryReady && S.shopRecipeId ? R(S.shopRecipeId) : null;
+  const plan = focused && shopNeeds(focused).length ? focused : choices[0]?.r;
+  const needs = plan ? shopNeeds(plan) : [];
+  const otherChoices = choices.filter(option => option.r.id !== plan?.id).slice(0, 3);
+  const offer = Object.hasOwn(STORE_OFFER_LINKS, S.store) ? STORE_OFFER_LINKS[S.store] : null;
+  const planHtml = !pantryReady ? `<div class="shop-empty" role="status">${sync === 'error' ? 'Your pantry could not be loaded, so shopping ideas are paused. Try again before deciding what to buy.' : 'Waiting for your pantry to sync before suggesting ingredients…'}${sync === 'error' ? '<button class="btn btn-ghost" data-act="shopRetry">Try loading pantry again</button>' : ''}</div>`
+    : plan ? `<div class="shop-plan-card">
+      <div class="shop-plan-title"><span aria-hidden="true">${esc(plan.emoji || '🍽️')}</span><div><b>${esc(plan.name)}</b><small>${plan.ing.length - needs.length} of ${plan.ing.length} ingredients match pantry items whose listed dates have not passed</small></div></div>
+      <div class="shop-need-list">${needs.map(({ ingredient, checkExisting }) => `<div class="shop-need"><span aria-hidden="true">${guessEmoji(needName(ingredient)) || '🛒'}</span><div><b>${esc(needName(ingredient))}</b><small>${checkExisting ? 'Matching pantry food needs a date check' : 'Not on your pantry list'}</small></div></div>`).join('')}</div>
+      <p>Check quantities and your food before buying. Listed dates alone cannot confirm whether food is safe.</p>
+      <button class="btn btn-ghost" data-act="recipe" data-arg="${esc(plan.id)}">View recipe</button>
+    </div>` : `<div class="shop-empty">No ingredient names appear to be missing from the current recipes. Check quantities and dates before your next trip, or save a recipe to plan another meal.</div>`;
+  const optionsHtml = otherChoices.map(option => `<button class="shop-recipe-choice" data-act="shopPlan" data-arg="${esc(option.r.id)}" aria-label="Plan ${esc(option.r.name)}">
+      <span aria-hidden="true">${esc(option.r.emoji || '🍽️')}</span><span><b>${esc(option.r.name)}</b><small>${S.saved.has(option.r.id) ? 'Saved recipe · ' : ''}${plural(option.needs.length, 'ingredient')} to check</small></span>${ic('right')}
+    </button>`).join('');
   return `<div class="appbar" style="padding-bottom:6px"><button class="back" data-act="dealsBack">${ic('left')} Settings</button></div>
   <div class="scroll">
-    <div class="store-banner"><b>${esc(S.store)}</b><span>Deals this week near ${esc(S.zip)} · prices update every Wednesday</span></div>
-    <div class="set-group"><span class="lbl">On sale</span><div class="set-card">${rows}</div></div>
-    <p class="hint" style="padding:12px 20px 30px;margin:0">Yellow notes flag food you already own so you don't buy it twice. Blue notes show deals that complete an easy recipe.</p>
+    <div class="shop-heading"><h1>Shop ideas</h1><p>Plan a meal with food you already have, then check your store's offers.</p></div>
+    <div class="store-banner shop-store"><span>Preferred store</span><b>${esc(S.store)}</b><span>${S.zip ? `ZIP ${esc(S.zip)} saved in MyPantry` : 'Choose your location on the store website'}</span><button data-act="storeSheet">Change store or ZIP</button></div>
+    <div class="set-group"><span class="lbl">Ingredients to look for</span>${planHtml}</div>
+    ${optionsHtml ? `<div class="set-group"><span class="lbl">Other meals to plan</span><div class="set-card">${optionsHtml}</div></div>` : ''}
+    <div class="set-group shop-offers"><span class="lbl">Current store offers</span><div class="shop-offer-card">
+      <b>${offer ? `Check ${esc(S.store)} directly` : 'Choose a supported store'}</b><p>MyPantry does not have live prices or stock. Choose your local store on the retailer's site to see its current offers and availability.</p>
+      ${offer ? `<a class="btn btn-primary" href="${offer.url}" target="_blank" rel="noopener noreferrer">Open ${esc(S.store)} ${esc(offer.label)} ↗</a>` : '<button class="btn btn-primary" data-act="storeSheet">Choose a store</button>'}
+    </div></div>
   </div>`;
 }
 function storeSheet() {
+  const selectedStore = STORES.includes(S.store) ? S.store : STORES[0];
   return `<div class="sheet-head"><h2>Preferred store</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body">
-    <div class="set-card">${STORES.map(s => `<label class="set-row" style="grid-template-columns:1fr auto;cursor:pointer"><b>${s}</b><input type="radio" name="storePick" value="${esc(s)}" ${s === S.store ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--basil)"></label>`).join('')}</div>
-    <div class="field"><label for="zipIn">ZIP code</label><input class="input num" id="zipIn" inputmode="numeric" maxlength="5" value="${esc(S.zip)}"><span class="field-err" id="zipErr" hidden>Enter a 5-digit ZIP code.</span></div>
+    <div class="set-card">${STORES.map(s => `<label class="set-row" style="grid-template-columns:1fr auto;cursor:pointer"><b>${s}</b><input type="radio" name="storePick" value="${esc(s)}" ${s === selectedStore ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--basil)"></label>`).join('')}</div>
+    <div class="field"><label for="zipIn">ZIP code (optional)</label><input class="input num" id="zipIn" inputmode="numeric" maxlength="5" value="${esc(S.zip)}"><span class="field-err" id="zipErr" hidden>Enter a 5-digit ZIP code, or leave this blank.</span></div>
   </div>
   <div class="sheet-foot"><button class="btn btn-primary" data-act="storeSave">Save store</button></div>`;
 }
@@ -2627,9 +2687,15 @@ const ACT = {
     const c = f2.querySelector('[data-id="card-more"]'); if (c) f2.scrollTo({ top: c.offsetTop, behavior: 'smooth' });
   },
   openSaved() { S.tab = 'reels'; S.reelView = 'saved'; render(); },
-  askMissing(id) {
-    const r = R(id); const miss = missingOf(r).map(g => ingName(g.m));
-    closeSheet(); S.tab = 'home'; render(); ask(`Do I have ${miss[0]}?`);
+  askMissing(id) { ACT.shopForRecipe(id); },
+  shopForRecipe(id) {
+    if (!R(id)) return;
+    closeSheet(); S.shopRecipeId = id; S.tab = 'settings'; S.setPage = 'deals'; render();
+  },
+  shopPlan(id) {
+    if (!R(id)) return;
+    S.shopRecipeId = id; render();
+    const sc = $('.scroll', app); if (sc) sc.scrollTop = 0;
   },
   share(id) { openSheet(shareSheet(R(id))); },
   shareTo(who) { closeSheet(); toast(who === 'link' ? 'Link copied' : `Sent to ${esc(who)}`, null, 'share'); },
@@ -2667,11 +2733,14 @@ const ACT = {
     $('#zipIn').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 5); });
   },
   storeSave() {
-    const z = $('#zipIn').value; if (!/^\d{5}$/.test(z)) { $('#zipErr').hidden = false; $('#zipIn').classList.add('bad'); return; }
-    S.store = $('input[name="storePick"]:checked').value; S.zip = z; persist(); closeSheet(); render(); toast(`Showing deals from ${esc(S.store)}`, null, 'store');
+    const z = $('#zipIn').value; if (z && !/^\d{5}$/.test(z)) { $('#zipErr').hidden = false; $('#zipIn').classList.add('bad'); return; }
+    const store = $('input[name="storePick"]:checked')?.value;
+    if (!STORES.includes(store)) return toast('Choose a store to save.', null, 'alert');
+    S.store = store; S.zip = z; persist(); closeSheet(); render(); toast(`Shopping preference saved: ${esc(S.store)}`, null, 'store');
   },
-  deals() { S.setPage = 'deals'; render(); },
-  dealsBack() { S.setPage = null; render(); },
+  deals() { S.shopRecipeId = null; S.tab = 'settings'; S.setPage = 'deals'; render(); },
+  dealsBack() { S.shopRecipeId = null; S.setPage = null; render(); },
+  shopRetry() { sync = 'loading'; render(); void loadPantry(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
   async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
   changeEmail() { S.setPage = 'email'; render(); },
