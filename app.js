@@ -97,12 +97,17 @@ const REV = { g: ['oz', 28.35], kg: ['lb', 0.4536], mL: ['fl oz', 29.57], L: ['g
 const UNITS_US = ['ct', 'oz', 'lb', 'fl oz', 'gal', 'can', 'loaf', 'head', 'bag', 'bulb', 'box', 'jar'];
 const UNITS_METRIC = ['ct', 'g', 'kg', 'mL', 'L', 'can', 'loaf', 'head', 'bag', 'bulb', 'box', 'jar'];
 const roundQ = (v, u) => (u === 'g' || u === 'mL') ? Math.round(v) : Math.round(v * 100) / 100;
+const unitWord = (quantity, unit) => {
+  if (unit === 'ct') return 'count';
+  const pluralUnit = { box: 'boxes', loaf: 'loaves', can: 'cans', bag: 'bags', jar: 'jars', head: 'heads', bulb: 'bulbs' };
+  return quantity !== 1 && pluralUnit[unit] ? pluralUnit[unit] : unit;
+};
 function disp(q, u) {
   if (S.metric && CONV[u]) { const [mu, f] = CONV[u]; return [roundQ(q * f, mu), mu]; }
   return [roundQ(q, u), u];
 }
 function fromDisp(q, u) { if (REV[u]) { const [bu, f] = REV[u]; return [q / f, bu]; } return [q, u]; }
-function qtyText(q, u) { const [v, uu] = disp(q, u); return uu === 'ct' ? `${v} count` : `${v} ${uu}`; }
+function qtyText(q, u) { const [v, uu] = disp(q, u); return `${v} ${unitWord(v, uu)}`; }
 
 /* ---------- Shelf-life model (category × storage) ---------- */
 const CATS = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dairy & Eggs', 'Grains & Bread', 'Snacks', 'Sauces & Condiments', 'Spices & Baking', 'Prepared Meals', 'Drinks', 'Other'];
@@ -320,6 +325,7 @@ function rowToItem(r) {
   return {
     id: 'db' + r.ingredient_id, dbId: r.ingredient_id,
     name: r.ingredient_name, emoji: guessEmoji(r.ingredient_name),
+    brand: r.brand || '', productName: r.product_name || '',
     cat: normalizeCategory(r.ingredient_name, r.food_type),
     qty: Number(r.quantity), unit: r.measurement, exp: r.expiration_date,
     legacyUserId: r.user_id ?? null, wayAdded: r.way_added || 'manual',
@@ -778,15 +784,19 @@ const logLine = l => `${esc(l.name)}: ${qtyText(l.from, l.unit)} → ${l.to <= 0
 
 function addItems(items) {
   items.forEach(n => {
-    const same = S.inv.find(i => i.name.toLowerCase() === n.name.toLowerCase() && i.exp === n.exp && i.unit === n.unit);
+    const same = S.inv.find(i => i.name.toLowerCase() === n.name.toLowerCase()
+      && (i.brand || '').toLowerCase() === (n.brand || '').toLowerCase()
+      && (i.productName || '').toLowerCase() === (n.productName || '').toLowerCase()
+      && i.exp === n.exp && i.unit === n.unit);
     if (same) same.qty = Math.round((same.qty + n.qty) * 100) / 100;
-    else S.inv.push({ id: 'i' + (uid++), name: n.name, emoji: n.emoji, cat: n.cat, qty: n.qty, unit: n.unit, exp: n.exp, store: n.store, src: n.src });
+    else S.inv.push({ id: 'i' + (uid++), name: n.name, brand: n.brand || '', productName: n.productName || '', emoji: n.emoji, cat: n.cat, qty: n.qty, unit: n.unit, exp: n.exp, store: n.store, src: n.src });
   });
 }
 
 function pantryRow(item) {
   return {
-    ingredient_name: item.name, quantity: item.qty, measurement: item.unit,
+    ingredient_name: item.name, brand: item.brand || null, product_name: item.productName || null,
+    quantity: item.qty, measurement: item.unit,
     food_type: item.cat, expiration_date: item.exp, status: statusFor(item.exp),
     storage_location: item.store, expiration_source: item.src
   };
@@ -868,7 +878,7 @@ async function saveNewItems(items, mode = 'manual') {
   $('#dbErr')?.remove();
   try {
     const rows = items.map(i => ({
-      auth_user_id: owner, ingredient_name: i.name, quantity: i.qty,
+      auth_user_id: owner, ingredient_name: i.name, brand: i.brand || null, product_name: i.productName || null, quantity: i.qty,
       measurement: i.unit, food_type: i.cat, expiration_date: i.exp,
       storage_location: i.store, expiration_source: i.src,
       way_added: ({ pantry: 'pantry_photo', receipt: 'receipt', barcode: 'barcode' })[mode] || 'manual',
@@ -900,10 +910,20 @@ async function saveNewItems(items, mode = 'manual') {
     buttons.forEach(b => { b.disabled = false; });
   }
 }
-function dupOf(name) {
-  const key = name.toLowerCase().replace(/\(.*?\)/g, '').trim().split(' ').slice(-1)[0].replace(/s$/, '');
-  if (key.length < 3) return [];
-  return S.inv.filter(i => i.name.toLowerCase().includes(key)).sort(byExp);
+function dupOf(item) {
+  const name = String(item.name || '').trim().toLowerCase();
+  const brand = String(item.brand || '').trim().toLowerCase();
+  const productName = String(item.productName || '').trim().toLowerCase();
+  if (!name) return [];
+  return S.inv.filter(i => {
+    if (i.unit !== item.unit) return false;
+    const sameBrand = String(i.brand || '').trim().toLowerCase() === brand;
+    const sameProduct = String(i.productName || '').trim().toLowerCase() === productName;
+    if (brand && productName && sameBrand && sameProduct) return true;
+    return i.name.trim().toLowerCase() === name
+      && (!i.brand || !brand || sameBrand)
+      && (!i.productName || !productName || sameProduct);
+  }).sort(byExp);
 }
 function learn(r) {
   S.prefs[r.main] = (S.prefs[r.main] || 0) + 1;
@@ -1401,17 +1421,17 @@ function syncChip() {
   return `<span class="pill ${m[1]}" id="syncChip" title="${sb ? 'Pantry is stored in Supabase' : 'No Supabase config found; changes stay in this browser'}">${m[0]}</span>`;
 }
 function itemRow(i) {
-  const [v, u] = disp(i.qty, i.unit);
   return `<button class="item" data-act="edit" data-arg="${i.id}" aria-label="Edit ${esc(i.name)}">
     ${imgHtml(i)}
-    <span><span class="name">${esc(i.name)}</span><br><span class="qty num">${u === 'ct' ? `${v} count` : `${v} ${u}`} · ${i.store}</span>
+    <span><span class="name">${esc(i.name)}</span><br><span class="qty num">${qtyText(i.qty, i.unit)} · ${i.store}</span>
       <span class="date num">${i.src === 'label' ? ic('tag') : ic('spark')} ${spoilText(i)}${i.src === 'ai' ? ' (estimate)' : ''}</span></span>
     <span class="right">${pillFor(i)}<svg class="edit-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P.pencil}</svg></span>
   </button>`;
 }
 function ingListHtml() {
   const q = S.ingQuery.toLowerCase().trim();
-  const items = S.inv.filter(i => (S.ingCat === 'All' || i.cat === S.ingCat) && (!q || i.name.toLowerCase().includes(q)));
+  const items = S.inv.filter(i => (S.ingCat === 'All' || i.cat === S.ingCat)
+    && (!q || [i.name, i.brand, i.productName].some(value => String(value || '').toLowerCase().includes(q))));
   if (!items.length) return `<div class="empty"><p>No food matches${q ? ` "${esc(q)}"` : ''}${S.ingCat !== 'All' ? ` in ${S.ingCat}` : ''}.</p></div>`;
   return CATS.filter(c => items.some(i => i.cat === c)).map(c => {
     const list = items.filter(i => i.cat === c).sort(byExp);
@@ -1431,6 +1451,34 @@ function renderSoon() {
 }
 
 /* ---------- Item form (edit / manual add / review edit) ---------- */
+function stripIdentityPart(text, part) {
+  if (!part) return text;
+  const at = text.toLowerCase().indexOf(part.toLowerCase());
+  if (at < 0 || /[a-z0-9]/i.test(text[at - 1] || '') || /[a-z0-9]/i.test(text[at + part.length] || '')) return text;
+  return `${text.slice(0, at)}${text.slice(at + part.length)}`
+    .replace(/\(\s*\)/g, '').replace(/\s+,/g, ',').replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,:\-]+|[\s,:\-]+$/g, '').trim();
+}
+function composeItemName(rawName, brand, productName, previous) {
+  let name = String(rawName || '').trim();
+  const priorBrand = String(previous?.brand || '').trim();
+  const priorProduct = String(previous?.productName || '').trim();
+  if (previous && name === previous.name && (brand !== priorBrand || productName !== priorProduct)) {
+    name = stripIdentityPart(name, priorProduct);
+    name = stripIdentityPart(name, priorBrand);
+  }
+  if (productName && !name.toLowerCase().includes(productName.toLowerCase())) name = `${productName} ${name}`.trim();
+  if (brand && !name.toLowerCase().includes(brand.toLowerCase())) name = `${brand} ${name}`.trim();
+  return name;
+}
+function itemIdentityFromForm(previous) {
+  const brand = $('#f_brand').value.trim();
+  let productName = $('#f_product').value.trim();
+  if (previous && brand !== String(previous.brand || '').trim() && productName === previous.productName) {
+    productName = stripIdentityPart(productName, String(previous.brand || '').trim());
+  }
+  return { brand, productName, name: composeItemName($('#f_name').value, brand, productName, previous) };
+}
 function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
@@ -1438,17 +1486,26 @@ function itemForm(it, mode) {
   const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Change it if it looks wrong.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
   const lookupNote = mode === 'review' && it.lookupSource
     ? `<div class="est-note">${ic('tag')}<span>Product information from ${esc(it.lookupSource)}. Check every field before saving.</span></div>` : '';
+  const existingNote = mode === 'review' && S.scan?.mode === 'barcode'
+    ? '<div class="est-note" id="barcodeDuplicate" hidden></div>' : '';
   const saveLabel = mode === 'new' ? 'Add to MyPantry'
     : mode === 'review' && S.scan?.mode === 'barcode' ? 'Save to MyPantry' : 'Save';
   return `<div class="sheet-head"><h2>${title}</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <form class="sheet-body" id="itemForm" novalidate data-mode="${mode}" data-id="${it.id || ''}">
     ${lookupNote}
-    <div class="field"><label for="f_name">Name</label><input class="input" id="f_name" value="${esc(it.name || '')}" placeholder="e.g. Cottage cheese" ${mode === 'new' ? 'autofocus' : ''}><span class="field-err" id="f_nameErr" hidden>Give this item a name.</span></div>
+    ${existingNote}
+    <div class="field"><label for="f_name">Food name</label><input class="input" id="f_name" value="${esc(it.name || '')}" placeholder="e.g. cereal or cottage cheese" ${mode === 'new' ? 'autofocus' : ''}><span class="field-err" id="f_nameErr" hidden>Give this item a food name.</span></div>
+    <div class="row2">
+      <div class="field"><label for="f_brand">Brand (optional)</label><input class="input" id="f_brand" value="${esc(it.brand || '')}" placeholder="e.g. Post" maxlength="80"></div>
+      <div class="field"><label for="f_product">Product name (optional)</label><input class="input" id="f_product" value="${esc(it.productName || '')}" placeholder="e.g. Honey Ohs!" maxlength="80"></div>
+    </div>
+    <div class="est-note">Keep the food type in the name, such as cereal. The brand and product name will appear with it.</div>
     <div class="row2">
       <div class="field"><label for="f_qty">Quantity</label><input class="input num" id="f_qty" inputmode="decimal" value="${v}"></div>
       <div class="field"><label for="f_unit">Measurement</label><select class="input" id="f_unit">${units.map(x => `<option ${x === u ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
     </div>
     <span class="field-err" id="f_qtyErr" hidden style="margin-top:-8px">Quantity can only be a number, like 2 or 0.5.</span>
+    <div class="est-note">For packaged food, choose box, bag or can and enter how many you have.</div>
     <div class="field"><label for="f_cat">Food category</label><select class="input" id="f_cat">${CATS.map(c => `<option ${c === (it.cat || 'Other') ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><span class="lbl">Stored in</span><div class="store-sel" id="f_store" role="radiogroup">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button type="button" role="radio" aria-checked="${s === (it.store || 'Fridge')}" class="${s === (it.store || 'Fridge') ? 'on' : ''}" data-store="${s}" style="flex:1;padding:8px">${s}</button>`).join('')}</div></div>
     <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" value="${it.exp || ''}"></div>
@@ -1475,20 +1532,37 @@ function openItemForm(it, mode) {
     $$('#f_store button').forEach(x => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
     b.classList.add('on'); b.setAttribute('aria-checked', 'true');
   });
+  const duplicateNote = $('#barcodeDuplicate');
+  if (duplicateNote) {
+    const updateDuplicate = () => {
+      const unit = fromDisp(1, $('#f_unit').value)[1];
+      const matches = dupOf({ ...itemIdentityFromForm(it), unit });
+      duplicateNote.hidden = !matches.length;
+      duplicateNote.innerHTML = matches.length
+        ? `${ic('alert')}<span>You already have ${matches.map(x => `${qtyText(x.qty, x.unit)} of ${esc(x.name)}`).join(' and ')}. Enter the number of new packages you are adding, or edit the existing item in Ingredients.</span>` : '';
+    };
+    ['#f_name', '#f_brand', '#f_product', '#f_unit'].forEach(selector => $(selector).addEventListener('input', updateDuplicate));
+    $('#f_unit').addEventListener('change', updateDuplicate);
+    updateDuplicate();
+  }
   $('#itemForm').addEventListener('submit', e => { e.preventDefault(); ACT.saveItem(); });
   validate();
 }
 function readItemForm() {
-  const name = $('#f_name').value.trim();
-  $('#f_nameErr').hidden = !!name; $('#f_name').classList.toggle('bad', !name);
-  if (!name) return null;
+  const form = $('#itemForm');
+  const previous = form.dataset.mode === 'edit' ? S.inv.find(i => i.id === form.dataset.id)
+    : form.dataset.mode === 'review' ? S.scan?.items.find(i => i.tid === form.dataset.id) : null;
+  const rawName = $('#f_name').value.trim();
+  $('#f_nameErr').hidden = !!rawName; $('#f_name').classList.toggle('bad', !rawName);
+  if (!rawName) return null;
+  const { name, brand, productName } = itemIdentityFromForm(previous);
   const q = parseFloat($('#f_qty').value);
   if (!(q > 0)) return null;
   const [bq, bu] = fromDisp(q, $('#f_unit').value);
   const cat = $('#f_cat').value;
   const store = $('#f_store .on')?.dataset.store || 'Fridge';
   const expIn = $('#f_exp').value;
-  return { name, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
+  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
 }
 
 /* ===========================================================
@@ -1725,14 +1799,29 @@ async function photoImage(file) {
   });
 }
 function photoItem(r) {
-  const cat = normalizeCategory(r.name || '', r.category);
+  const brand = String(r.brand || '').trim();
+  const productName = String(r.product_name || '').trim();
+  const name = composeItemName(String(r.name || '').trim(), brand, productName);
+  const cat = normalizeCategory(name, r.category);
   const store = ['Fridge', 'Pantry', 'Freezer'].includes(r.storage) ? r.storage : 'Pantry';
   const qty = Number(r.quantity) > 0 ? Number(r.quantity) : 1;
   // A date printed on the package beats our estimate, unless the item is frozen.
   const label = typeof r.label_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.label_date) && store !== 'Freezer' ? r.label_date : null;
-  return { tid: 't' + (uid++), name: String(r.name).slice(0, 60), emoji: guessEmoji(String(r.name)), cat,
+  return { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat,
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
     exp: label || estimate(cat, store), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
+}
+function combinePhotoPackages(items) {
+  const combined = [];
+  for (const item of items) {
+    const same = combined.find(x => x.name.toLowerCase() === item.name.toLowerCase()
+      && x.brand.toLowerCase() === item.brand.toLowerCase()
+      && x.productName.toLowerCase() === item.productName.toLowerCase()
+      && x.cat === item.cat && x.unit === item.unit && x.store === item.store && x.exp === item.exp);
+    if (same) same.qty = Math.round((same.qty + item.qty) * 100) / 100;
+    else combined.push(item);
+  }
+  return combined;
 }
 async function scanPhoto(file) {
   const sc = S.scan;
@@ -1760,7 +1849,8 @@ async function scanPhoto(file) {
     try { result = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(result.error || 'Photo scanning is unavailable. Please try again.');
     if (!current()) return;
-    const items = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(photoItem);
+    const found = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(photoItem);
+    const items = sc.mode === 'pantry' ? combinePhotoPackages(found) : found;
     if (!items.length) {
       fail(result.readable === false ? t.bad : t.none);
       return;
@@ -1931,14 +2021,16 @@ async function lookupBarcode(rawBarcode, sc) {
     if (!response.ok) throw new Error(result.error || 'Bar code lookup is unavailable. Try again.');
     if (!current()) return;
     const item = result.item || {};
-    const cat = normalizeCategory(item.name || '', item.category);
+    const brand = String(item.brand || '').trim();
+    const productName = String(item.product_name || '').trim();
+    const name = composeItemName(String(item.name || '').trim(), brand, productName);
+    const cat = normalizeCategory(name, item.category);
     const store = ['Fridge', 'Pantry', 'Freezer'].includes(item.storage) ? item.storage : 'Pantry';
     const unit = UNITS_US.includes(item.unit) ? item.unit : 'ct';
     const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
-    const name = String(item.name || '').trim().slice(0, 60);
     const lookupSource = item.source === 'Open Food Facts' ? 'Open Food Facts' : 'USDA FoodData Central';
     if (!name) throw new Error('The product database returned this bar code without a product name.');
-    const detected = { tid: 't' + (uid++), name, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
+    const detected = { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
       src: 'ai', exp: estimate(cat, store), on: true, barcode, lookupSource };
     sc.items = [detected]; sc.stage = 'review'; render();
     openItemForm({ ...detected, id: detected.tid }, 'review');
@@ -1948,7 +2040,7 @@ async function lookupBarcode(rawBarcode, sc) {
 }
 function buildDetected(mode) {
   return DETECT[mode].map(d => ({
-    tid: 't' + (uid++), name: d.name, emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
+    tid: 't' + (uid++), name: d.name, brand: d.brand || '', productName: d.productName || '', emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
     pkg: d.qty || null, store: d.store, src: d.src,
     exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store), on: true
   }));
@@ -1969,18 +2061,18 @@ function renderReview() {
 }
 function reviewCard(i) {
   const [v, u] = disp(i.qty, i.unit);
-  const dups = dupOf(i.name);
+  const dups = dupOf(i);
   const tmp = { exp: i.exp };
   const d = daysLeft(tmp);
   return `<div class="rv ${i.on ? '' : 'off'}" data-tid="${i.tid}">
     <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.lookupSource ? ` · ${esc(i.lookupSource)}` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
-      <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${u === 'ct' ? 'count' : u}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
+      <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${unitWord(v, u)}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
       <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : i.barcode ? 'Estimated from category' : 'AI estimate'}</span></div>
     </div>
     <div class="rv-bottom"><span class="hint">Stored in</span><div class="store-sel">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button class="${s === i.store ? 'on' : ''}" data-act="reviewStore" data-arg="${i.tid}|${s}">${s}</button>`).join('')}</div></div>
-    ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Remove it if this is the same one.</span></div>` : ''}` : ''}
+    ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Check whether these are new packages or ones you've already counted.</span></div>` : ''}` : ''}
   </div>`;
 }
 function renderDone() {
@@ -2420,7 +2512,7 @@ const ACT = {
     } else if (mode === 'edit') {
       const it = S.inv.find(i => i.id === id);
       const expChanged = $('#f_exp').value !== it.exp;
-      Object.assign(it, { name: data.name, qty: data.qty, unit: data.unit, cat: data.cat, store: data.store, exp: $('#f_exp').value || data.exp, emoji: it.emoji || data.emoji });
+      Object.assign(it, { name: data.name, brand: data.brand, productName: data.productName, qty: data.qty, unit: data.unit, cat: data.cat, store: data.store, exp: $('#f_exp').value || data.exp, emoji: it.emoji || data.emoji });
       if (expChanged && $('#f_exp').value) it.src = 'label';
       closeSheet(); render(); toast(`Saved ${esc(it.name)}`);
     } else if (mode === 'review') {
@@ -2622,7 +2714,7 @@ async function saveItemToDb(id, data) {
   let row, error;
   try {
   ({ data: row, error } = await sb.from('pantry_item')
-    .update({ ingredient_name: data.name, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp), storage_location: data.store, expiration_source: data.src })
+    .update({ ingredient_name: data.name, brand: data.brand || null, product_name: data.productName || null, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp), storage_location: data.store, expiration_source: data.src })
     .eq('ingredient_id', it.dbId)
     .eq(OWNER_COLUMN, owner)
     .select()

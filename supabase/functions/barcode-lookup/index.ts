@@ -162,19 +162,23 @@ export async function lookupOpenFoodFacts(barcode) {
 
 export function cleanOpenFoodFacts(product) {
   const clean = value => String(value || '').replace(/[\u0000-\u001f<>]/g, '').trim();
-  let name = clean(product?.product_name_en || product?.product_name || product?.generic_name)
+  const label = clean(product?.product_name_en || product?.product_name || product?.generic_name)
     .replace(/\s+[\u2019']s\s*$/i, '').trim();
   const brand = clean(product?.brands).split(',')[0].trim();
-  if (brand && name && !name.toLowerCase().includes(brand.toLowerCase())) name = `${brand} ${name}`;
-  if (!name) return null;
+  if (!label) return null;
+  const productName = withoutBrand(label, brand);
+  const name = [brand, productName].filter(Boolean).join(' ');
   const food = {
     description: name,
     foodCategory: `${clean(product?.categories)} ${(Array.isArray(product?.categories_tags) ? product.categories_tags : []).join(' ')}`
   };
   const category = categoryFor(food);
+  const cereal = isBoxedCereal(food);
   return {
-    name: simpleName(name).toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()).slice(0, 60),
-    ...amountFor(product?.quantity),
+    name: readableName(name, cereal),
+    ...(brand ? { brand: brand.slice(0, 60) } : {}),
+    ...(productName ? { product_name: readableName(productName, false) } : {}),
+    ...(cereal ? { quantity: 1, unit: 'box' } : amountFor(product?.quantity)),
     category,
     storage: storageFor(food, category),
     source: 'Open Food Facts'
@@ -259,17 +263,43 @@ export function simpleName(description) {
   return kept.join(', ');
 }
 
+// Keep the labeled product distinct from its brand while retaining a searchable
+// food type in the pantry name when the product name alone is unfamiliar.
+function withoutBrand(label, brand) {
+  if (!brand) return label;
+  const at = label.toLowerCase().indexOf(brand.toLowerCase());
+  if (at < 0 || /[a-z0-9]/i.test(label[at - 1] || '') || /[a-z0-9]/i.test(label[at + brand.length] || '')) return label;
+  return `${label.slice(0, at)}${label.slice(at + brand.length)}`
+    .replace(/^[\s,:\-]+|[\s,:\-]+$/g, '').replace(/\s+,/g, ',').replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ');
+}
+
+function isBoxedCereal(food) {
+  const text = `${food?.description || ''} ${food?.foodCategory || ''}`.toLowerCase();
+  return /\bcereals?\b/.test(text) && !/\b(?:cereal|breakfast)\s+bars?\b/.test(text);
+}
+
+function readableName(value, cereal) {
+  let name = simpleName(value).toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+  if (cereal && !/\bcereals?\b/i.test(name)) name = `${name.slice(0, 53).trim()} Cereal`;
+  return name.slice(0, 60);
+}
+
 export function cleanFood(food) {
   const clean = value => String(value || '').replace(/[\u0000-\u001f<>]/g, '').trim();
   const category = categoryFor(food);
   const description = simpleName(clean(food?.description));
+  const brand = clean(food?.brandName);
+  const productName = withoutBrand(description, brand);
+  const fullName = [brand, productName].filter(Boolean).join(' ');
+  const cereal = isBoxedCereal(food);
   return {
-    name: description.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()).slice(0, 60) || 'Unknown food',
-    ...amountFor(food?.packageWeight),
+    name: readableName(fullName, cereal) || 'Unknown food',
+    ...(brand ? { brand: brand.slice(0, 60) } : {}),
+    ...(productName ? { product_name: readableName(productName, false) } : {}),
+    ...(cereal ? { quantity: 1, unit: 'box' } : amountFor(food?.packageWeight)),
     category,
     storage: storageFor(food, category)
   };
 }
 
 Deno.serve(handler);
-

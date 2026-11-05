@@ -92,7 +92,7 @@ test('looks up an exact normalized GTIN and maps it to existing pantry fields', 
   assert.equal(b.calls[1].options.headers['X-Api-Key'], 'usda-key');
   assert.deepEqual(await response.json(), {
     barcode: '016000275287',
-    item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' }
+    item: { name: 'Cheddar Cheese', product_name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' }
   });
 });
 
@@ -116,7 +116,7 @@ test('retries USDA with the UPC body and accepts the equivalent EAN', async () =
   ]);
   assert.deepEqual(await response.json(), {
     barcode: '052000067750',
-    item: { name: 'Gatorade Lower Sugar Fruit Punch', quantity: 28, unit: 'fl oz', category: 'Drinks', storage: 'Pantry', source: 'USDA FoodData Central' }
+    item: { name: 'Gatorade Lower Sugar Fruit Punch', product_name: 'Gatorade Lower Sugar Fruit Punch', quantity: 28, unit: 'fl oz', category: 'Drinks', storage: 'Pantry', source: 'USDA FoodData Central' }
   });
 });
 
@@ -138,17 +138,17 @@ test('uses Open Food Facts only after USDA has no matching product', async () =>
     {
       barcode: '6281036564108',
       product: { code: '6281036564108', product_name: 'Doritos Nacho Cheese', brands: 'Doritos', quantity: '48g', categories: 'Corn chips' },
-      expected: { name: 'Doritos Nacho Cheese', quantity: 1.69, unit: 'oz', category: 'Snacks', storage: 'Pantry', source: 'Open Food Facts' }
+      expected: { name: 'Doritos Nacho Cheese', brand: 'Doritos', product_name: 'Nacho Cheese', quantity: 1.69, unit: 'oz', category: 'Snacks', storage: 'Pantry', source: 'Open Food Facts' }
     },
     {
       barcode: '040000579816',
       product: { code: '0040000579816', product_name: 'Peanut butter ’s', brands: "M&M's", quantity: '9.0 oz', categories: 'Candy chocolate bars' },
-      expected: { name: "M&m's Peanut Butter", quantity: 9, unit: 'oz', category: 'Snacks', storage: 'Pantry', source: 'Open Food Facts' }
+      expected: { name: "M&m's Peanut Butter", brand: "M&M's", product_name: 'Peanut Butter', quantity: 9, unit: 'oz', category: 'Snacks', storage: 'Pantry', source: 'Open Food Facts' }
     },
     {
       barcode: '052000067750',
       product: { code: '0052000067750', product_name: 'LOWER SUGAR FRUIT PUNCH ELECTROLYTE BEVERAGE', brands: 'Gatorade' },
-      expected: { name: 'Gatorade Lower Sugar Fruit Punch Electrolyte Beverage', quantity: 1, unit: 'ct', category: 'Drinks', storage: 'Pantry', source: 'Open Food Facts' }
+      expected: { name: 'Gatorade Lower Sugar Fruit Punch Electrolyte Beverage', brand: 'Gatorade', product_name: 'Lower Sugar Fruit Punch Electrolyte Beverage', quantity: 1, unit: 'ct', category: 'Drinks', storage: 'Pantry', source: 'Open Food Facts' }
     }
   ];
   for (const entry of cases) {
@@ -187,6 +187,7 @@ test('cleans repeated USDA names, parses mixed fractions, and prioritizes snacks
   const body = await (await b.request('028400325080')).json();
   assert.deepEqual(body.item, {
     name: 'Spicy Nacho Tortilla Chips',
+    product_name: 'Spicy Nacho Tortilla Chips',
     quantity: 2.75,
     unit: 'oz',
     category: 'Snacks',

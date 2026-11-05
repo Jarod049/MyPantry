@@ -7,6 +7,8 @@ the account data currently used by the app.
 ## What syncs
 
 - Pantry additions, edits, deletions, recipe consumption, and reset operations.
+  A pantry item can also save its optional brand and specific product name,
+  alongside the food name used for display and recipe matching.
 - Confirmed food waste in `food_waste_events`: the ingredient, amount, unit,
   reason, and time reported by the user. Waste history stays available after
   the ingredient is removed or the inventory is reset.
@@ -46,19 +48,34 @@ migration.
    or removing the corresponding pantry amount in one database transaction.
    Authenticated app clients add waste records through the function and can
    read only their own records.
-6. Deploy the matching frontend through the existing Pages workflow. It uses
+6. Review and apply `supabase/migrations/20261104_pantry_product_identity.sql`
+   before deploying branded product recognition. It adds optional `brand` and
+   `product_name` fields to `pantry_item`. Existing rows retain their names and
+   have empty identity fields until a user edits them; the migration does not
+   combine pantry rows or change their quantities.
+7. Deploy the revised `receipt-scan` and `barcode-lookup` Edge Functions to the
+   target Supabase project after the migration and before deploying the
+   frontend. This is a separate Supabase deployment; the GitHub Pages workflow
+   does not deploy Edge Functions.
+8. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-7. In a preview build, sign in and check that pantry edits, deletion, recipe
+9. In a preview build, sign in and check that pantry edits, deletion, recipe
    consumption, food waste, recipe activity, settings, and chat messages remain
-   after a reload. Check two accounts to confirm they cannot see each other's
-   records.
+   after a reload. Confirm that a branded item keeps its brand and product name,
+   and that multiple boxes remain represented after a reload. Check two
+   accounts to confirm they cannot see each other's records.
 
 Food waste is recorded only when a user explicitly logs it. An expired date or
 an ordinary ingredient deletion does not count as waste. Waste reports retain
 the ingredient's unit; totals with incompatible units such as pounds, gallons,
 and counts must not be summed into one amount. Reset inventory removes pantry
 rows but preserves food waste history.
+
+Package counts use the pantry item's quantity and measurement (for example,
+quantity `2` and measurement `box` appears as “2 boxes”). Branded products and batches with different expiration dates may
+remain separate pantry rows; there is no uniqueness rule on their names or
+brands.
 
 These migrations are additive and do not copy or reassign legacy numeric user
 records. Apply the matching migration before deploying each frontend feature;
