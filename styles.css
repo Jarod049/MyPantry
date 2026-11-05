@@ -658,20 +658,34 @@ button.set-row:hover { background: var(--surface-2); }
 .profile b { font-size: 16px; display: block; }
 .profile small { color: var(--ink-3); font-size: 13px; }
 .version { text-align: center; font-size: 12px; color: var(--ink-3); padding: 18px 0 26px; }
-.deal { display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: center; padding: 11px 14px; border-top: 1px solid var(--line); }
-.deal:first-child { border-top: 0; }
-.deal .img { width: 44px; height: 44px; border-radius: 12px; background: var(--surface-3); display: grid; place-items: center; font-size: 24px; }
-.deal b { font-size: 14.5px; display: block; }
-.deal .price { text-align: right; }
-.deal .price b { color: var(--basil); font-family: var(--display); font-size: 17px; }
-.deal .price s { font-size: 12px; color: var(--ink-3); }
-.deal .note { font-size: 12px; font-weight: 600; margin-top: 2px; }
-.deal .note.have { color: var(--butter); }
-.deal .note.idea { color: var(--sky); }
-.stock { font-size: 11.5px; color: var(--ink-3); }
 .store-banner { margin: 6px 14px 0; border-radius: var(--r-md); padding: 14px; background: var(--basil); color: var(--on-brand); display: grid; gap: 2px; }
 .store-banner b { font-family: var(--display); font-size: 19px; }
 .store-banner span { font-size: 13px; opacity: .85; }
+.shop-heading { margin: 6px 20px 14px; }
+.shop-heading h1 { font-size: 27px; }
+.shop-heading p { color: var(--ink-2); font-size: 14px; margin: 4px 0 0; }
+.shop-store button { justify-self: start; margin-top: 8px; padding: 5px 10px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; font-size: 12px; font-weight: 700; }
+.shop-plan-card, .shop-offer-card, .shop-empty { padding: 15px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.shop-plan-title { display: flex; align-items: center; gap: 10px; }
+.shop-plan-title > span { width: 42px; height: 42px; border-radius: 12px; background: var(--basil-soft); display: grid; place-items: center; font-size: 23px; flex: none; }
+.shop-plan-title b, .shop-offer-card b { display: block; font-family: var(--display); font-size: 17px; }
+.shop-plan-title small, .shop-recipe-choice small { display: block; color: var(--ink-3); font-size: 12px; }
+.shop-need-list { margin: 13px 0; border-top: 1px solid var(--line); }
+.shop-need { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.shop-need > span { font-size: 21px; width: 28px; text-align: center; flex: none; }
+.shop-need b { display: block; font-size: 14px; }
+.shop-need small { color: var(--ink-3); font-size: 12px; }
+.shop-plan-card p, .shop-offer-card p { color: var(--ink-2); font-size: 12.5px; margin: 0 0 12px; }
+.shop-recipe-choice { display: grid; grid-template-columns: 28px 1fr 16px; align-items: center; gap: 10px; padding: 12px 14px; border: 0; border-top: 1px solid var(--line); background: transparent; text-align: left; width: 100%; }
+.shop-recipe-choice:first-child { border-top: 0; }
+.shop-recipe-choice:hover { background: var(--surface-2); }
+.shop-recipe-choice > span:first-child { font-size: 23px; }
+.shop-recipe-choice b { display: block; font-size: 14px; }
+.shop-recipe-choice svg { width: 16px; height: 16px; color: var(--ink-3); }
+.shop-empty { color: var(--ink-2); font-size: 14px; }
+.shop-empty .btn { margin-top: 12px; }
+.shop-offers { margin-bottom: 28px; }
+.shop-offer-card a { text-decoration: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

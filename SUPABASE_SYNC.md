@@ -13,7 +13,9 @@ the account data currently used by the app.
   reason, and time reported by the user. Waste history stays available after
   the ingredient is removed or the inventory is reset.
 - Saved, liked, and watched recipe IDs, recipe preferences, unit preference,
-  preferred store, and the ZIP code used for local deals.
+  preferred store, and an optional ZIP code saved as a shopping preference.
+  MyPantry links to official retailer offers; shoppers choose their local store
+  on the retailer's site.
 - Spoil-reminder and unit preferences.
 - Assistant messages in the current conversation. Starting a new chat creates a
   separate conversation; the app resumes the latest conversation on sign-in.

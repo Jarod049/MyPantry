@@ -14,6 +14,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 - Track food stored in the fridge and pantry
 - Track expiration dates and identify food that should be used soon
 - Get recipe suggestions based on food already available
+- Plan a shopping trip around ingredients missing from recipes and open preferred-store offers
 - Ask an AI assistant questions about food, cooking, and recipes
 - Browse food reels for meal and recipe inspiration
   
@@ -66,6 +67,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
 Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed lists recipes you can make now, then ones missing one or two ingredients, then the rest, loading 8 at a time.
+
+Settings → Shopping → Shop ideas uses the signed-in account's preferred store, ZIP, pantry, and saved recipes. It shows ingredient ideas for recipes, checks whether a matching pantry item is already listed, and flags items whose listed dates need review. It does not calculate exact purchase quantities or determine food safety. The store button opens that retailer's official offers page; the user chooses a local store and checks current prices and availability there. MyPantry does not currently ingest live retailer prices, promotions, or stock, and no new database migration is needed for these suggestions.
 
 Receipt photos are read by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
 
