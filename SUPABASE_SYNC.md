@@ -12,11 +12,15 @@ the account data currently used by the app.
 - Confirmed food waste in `food_waste_events`: the ingredient, amount, unit,
   reason, and time reported by the user. Waste history stays available after
   the ingredient is removed or the inventory is reset.
-- Saved, liked, and watched recipe IDs, recipe preferences, unit preference,
+- Saved, liked, and watched recipe IDs, learned recipe preferences, food
+  allergy ingredient filters, unit preference,
   preferred store, and an optional ZIP code saved as a shopping preference.
   MyPantry links to official retailer offers; shoppers choose their local store
   on the retailer's site.
 - Spoil-reminder and unit preferences.
+- A private profile photo in the `avatars` Storage bucket. The Auth account
+  stores only its avatar object path; signed URLs are generated when the user
+  signs in, and Storage policies restrict each folder to its owner.
 - Assistant messages in the current conversation. Starting a new chat creates a
   separate conversation; the app resumes the latest conversation on sign-in.
 - App sessions in `app_sessions`: session start, a last-active time updated
@@ -55,18 +59,23 @@ migration.
    `product_name` fields to `pantry_item`. Existing rows retain their names and
    have empty identity fields until a user edits them; the migration does not
    combine pantry rows or change their quantities.
-7. Deploy the revised `receipt-scan` and `barcode-lookup` Edge Functions to the
+7. Review and apply `supabase/migrations/20261105_profile_avatars.sql` before
+   deploying profile photos. It creates a private `avatars` Storage bucket with
+   a 5 MB image limit and policies that allow authenticated users to read,
+   upload, replace, and delete files only inside their own UUID folder.
+8. Deploy the revised `receipt-scan`, `barcode-lookup`, and `pantry-chat` Edge Functions to the
    target Supabase project after the migration and before deploying the
    frontend. This is a separate Supabase deployment; the GitHub Pages workflow
    does not deploy Edge Functions.
-8. Deploy the matching frontend through the existing Pages workflow. It uses
+9. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-9. In a preview build, sign in and check that pantry edits, deletion, recipe
+10. In a preview build, sign in and check that pantry edits, deletion, recipe
    consumption, food waste, recipe activity, settings, and chat messages remain
-   after a reload. Confirm that a branded item keeps its brand and product name,
+   after a reload. Upload and remove a profile photo, then verify it survives a
+   new session. Confirm that a branded item keeps its brand and product name,
    and that multiple boxes remain represented after a reload. Check two
-   accounts to confirm they cannot see each other's records.
+   accounts to confirm they cannot see each other's records or photos.
 
 Food waste is recorded only when a user explicitly logs it. An expired date or
 an ordinary ingredient deletion does not count as waste. Waste reports retain

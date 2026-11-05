@@ -94,6 +94,13 @@ test('username update applies the confirmed Auth user and survives session resto
  const updated=f.events.at(-1)[0];assert.equal(updated.user.user_metadata.name,'Jared');
  const restored=fixture(updated);await restored.auth.start();assert.equal(restored.events.at(-1)[0].user.user_metadata.name,'Jared');
 });
+test('profile photo path is saved in Auth metadata for the current account',async()=>{
+ const f=fixture(session('alice'));await f.auth.start();
+ f.api.updateUser=async input=>{f.calls.push(input);return {data:{user:{...session('alice').user,user_metadata:input.data}}};};
+ await f.auth.updateAvatarPath('alice/profile.jpg');
+ assert.deepEqual(f.calls.at(-1),{data:{avatar_path:'alice/profile.jpg'}});
+ assert.equal(f.events.at(-1)[0].user.user_metadata.avatar_path,'alice/profile.jpg');
+});
 test('password update sends only the new password to Supabase and keeps the current account',async()=>{
  const f=fixture(session('alice'));await f.auth.start();await f.auth.updatePassword('Abc123!x');
  assert.deepEqual(f.calls.at(-1),{password:'Abc123!x'});assert.equal(f.events.at(-1)[0].user.id,'alice');

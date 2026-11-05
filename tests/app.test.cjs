@@ -26,7 +26,8 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       videoHeight: { configurable: true, get: () => 720 }
     });
     w.HTMLVideoElement.prototype.play = async function () {};
-    w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {} });
+    w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {}, translate() {}, scale() {} });
+    w.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q==';
     w.HTMLCanvasElement.prototype.toBlob = function (callback) {
       callback(new w.Blob([new Uint8Array([255, 216, 255, 224])], { type: 'image/jpeg' }));
     };
@@ -61,6 +62,24 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
         saved = { ...saved, user: { ...saved.user, ...(input.email ? { new_email: input.email } : {}), user_metadata: { ...saved.user.user_metadata, ...input.data } } };
         listener('USER_UPDATED', saved);
         return { data: { user: saved.user } };
+      }
+    },
+    storage: {
+      from(bucket) {
+        return {
+          async upload(filePath, blob, options) {
+            queries.push({ storageUpload: { bucket, filePath, blob, options } });
+            return { data: { path: filePath }, error: null };
+          },
+          async createSignedUrl(filePath, expiresIn) {
+            queries.push({ signedUrl: { bucket, filePath, expiresIn } });
+            return { data: { signedUrl: `https://signed.example.test/${bucket}/${filePath}` }, error: null };
+          },
+          async remove(filePaths) {
+            queries.push({ storageRemove: { bucket, filePaths } });
+            return { data: filePaths.map(name => ({ name })), error: null };
+          }
+        };
       }
     },
     from(table) {
@@ -463,6 +482,16 @@ test('bad credentials display an error without entering the pantry', async t => 
   f.form('#loginForm', { li_email: 'alice@example.test', li_pw: 'bad' }); await tick();
   assert.match(f.text(), /Invalid login credentials/); assert.equal(f.queries.length, 0);
 });
+test('login keeps recovery beside the password label and account creation secondary', async t => {
+  const f = boot(); t.after(() => f.dom.window.close()); await tick();
+  const form = f.w.document.querySelector('#loginForm');
+  const password = form.querySelector('.login-password');
+  const heading = password.querySelector('.field-heading');
+  assert.equal(heading.querySelector('label[for="li_pw"]').textContent, 'Password');
+  assert.equal(heading.querySelector('[data-arg="forgot"]').textContent, 'Forgot password?');
+  assert.equal(form.querySelector('.btn-auth-secondary[data-arg="signup"]').textContent, 'Create an account');
+  assert.doesNotMatch(form.textContent, /You stay signed in until you sign out/);
+});
 test('ordinary connected accounts cannot see demo tools', async t => {
   const f = boot({ id: 'bob', config: { demoAccountId: 'alice' } }); t.after(() => f.dom.window.close()); await tick();
   assert.match(f.text(), /Pantry Pal/);
@@ -542,6 +571,30 @@ test('username is saved through Supabase Auth and restored from account metadata
  const reloaded=boot({id:'alice',metadata:{name:'Jared'}});t.after(()=>reloaded.dom.window.close());await tick();
  reloaded.click('[data-act="tab"][data-arg="settings"]');assert.match(reloaded.text(),/Jared/);
 });
+test('profile row opens a front-camera flow and saves a private account photo', async t => {
+  const requests = [];
+  const camera = { getUserMedia: async constraints => {
+    requests.push(constraints);
+    return { getTracks: () => [{ stop() {} }] };
+  } };
+  const f = boot({ id: 'alice', camera }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="settings"]');
+  f.click('[data-act="editProfile"]');
+  assert.match(f.text(), /Take a photo/);
+  assert.ok(f.w.document.querySelector('#profilePhotoPick:not([capture])'));
+  f.click('[data-act="profileCamera"]'); await settle();
+  assert.equal(requests[0].video.facingMode.ideal, 'user');
+  assert.ok(f.w.document.querySelector('#profileCameraFeed'));
+  f.click('[data-act="profileShutter"]');
+  assert.ok(f.w.document.querySelector('[data-act="profileSave"]'));
+  f.click('[data-act="profileSave"]'); await settle();
+  const upload = f.queries.find(query => query.storageUpload);
+  assert.equal(upload.storageUpload.bucket, 'avatars');
+  assert.match(upload.storageUpload.filePath, /^alice\/profile-\d+\.jpg$/);
+  assert.equal(upload.storageUpload.options.upsert, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.queries.find(query => query.authUpdate).authUpdate)), { data: { avatar_path: upload.storageUpload.filePath } });
+  assert.ok(f.w.document.querySelector('.profile .av img'));
+});
 test('password form validates and updates Auth without writing pantry data',async t=>{
  const f=boot({id:'alice'});t.after(()=>f.dom.window.close());await tick();
  f.click('[data-act="tab"][data-arg="settings"]');f.click('[data-act="changePw"]');
@@ -616,6 +669,22 @@ test('manual form offers and persists the selected eleven food categories',async
 });
 
 const pantryRow = (id, name, qty = 2, unit = 'ct', owner) => ({ ingredient_id: id, auth_user_id: owner, ingredient_name: name, expiration_date: '2030-01-01', quantity: qty, measurement: unit, food_type: 'Other', storage_location: 'Fridge' });
+test('preset and custom allergies sync and remove matching recipe suggestions', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'allergy-user'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'allergy-user'), pantryRow(3, 'Butter', 1, 'lb', 'allergy-user')];
+  const f = boot({ id: 'allergy-user', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="settings"]'); f.click('[data-act="editAllergies"]');
+  f.click('[data-act="allergyToggle"][data-arg="eggs"]');
+  f.form('#allergyForm', { allergyInput: 'Mustard' });
+  assert.match(f.text(), /Mustard/);
+  f.click('[data-act="allergySave"]');
+  const local = JSON.parse(f.w.localStorage.getItem('mp_state_v2:allergy-user'));
+  assert.deepEqual(local.prefs.allergies, ['eggs', 'mustard']);
+  await new Promise(resolve => setTimeout(resolve, 240));
+  const synced = f.queries.filter(query => query.table === 'user_app_state' && query.upsert).at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(synced.upsert[0].recipe_preferences.allergies)), ['eggs', 'mustard']);
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  assert.equal(f.w.document.querySelector('.reel[data-id="scrambled"]'), null);
+});
 test('reels feed shows only recipes you can make, then an option for ones needing more', async t => {
   const database = [pantryRow(1, 'Eggs', 12, 'ct', 'reeler'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'reeler'), pantryRow(3, 'Butter', 1, 'lb', 'reeler')];
   const f = boot({ id: 'reeler', database }); t.after(() => f.dom.window.close()); await tick();

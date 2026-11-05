@@ -76,6 +76,17 @@
         apply({ ...current, user: data.user }, 'USER_UPDATED');
         return data.user;
       },
+      async updateAvatarPath(avatarPath) {
+        const owner = current?.user?.id;
+        if (!owner) throw new Error('Please sign in again.');
+        const { data, error } = await client.auth.updateUser({ data: { avatar_path: avatarPath || null } });
+        if (error) throw error;
+        if (current?.user?.id !== owner) throw new Error('The signed-in account changed.');
+        if (!data?.user || data.user.id !== owner) throw new Error('The profile photo could not be confirmed. Please try again.');
+        ++revision;
+        apply({ ...current, user: data.user }, 'USER_UPDATED');
+        return data.user;
+      },
       async updatePassword(password) {
         const owner = current?.user?.id;
         if (!owner) throw new Error('Please sign in again.');

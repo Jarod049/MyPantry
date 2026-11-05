@@ -53,6 +53,10 @@ Navigation and unfinished scans remain browser-local. Demo data stays separate f
 
 Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, ZIP code, and assistant conversations to Supabase. Apply the account-state migrations and `supabase/migrations/20261101_pantry_delete.sql` before deploying this frontend. The delete migration is required by inventory reset and Demo pantry tools. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
 
+Profile photos use the private Supabase Storage bucket and owner-only policies created by `supabase/migrations/20261105_profile_avatars.sql`. Apply that migration before deploying the profile-photo UI. Users can open their profile row in Settings, take a front-camera photo or choose an image, replace it, and remove it.
+
+Food allergy preferences are stored in the existing per-account `recipe_preferences` JSON. Settings provides the nine common allergen presets plus custom ingredient entries for less common allergies. Matching recipes are removed from generated suggestions, shopping ideas, Reels, and Pantry Pal prompts; saved recipes remain visible with a warning. This is a suggestion filter rather than a food-safety guarantee because recipe data cannot detect incomplete labels or cross-contact. Redeploy the `pantry-chat` Edge Function with the frontend so AI suggestions receive the saved allergy list. No additional database migration is required.
+
 ## 6. Deploy
 
 The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. It uploads the HTML, CSS, app.js, auth.js, and generated config.js. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.

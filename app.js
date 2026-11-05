@@ -278,7 +278,9 @@ function freshState() {
     prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     ingView: 'all', ingCat: 'All', ingQuery: '',
-    scan: null, setPage: null, reelView: 'feed', shopRecipeId: null
+    scan: null, setPage: null, reelView: 'feed', shopRecipeId: null,
+    profileDraft: null, profileCamera: null, profileError: null, profileLoading: false, profileSaving: false,
+    allergyDraft: null, allergyError: null
   };
 }
 S = freshState();
@@ -431,7 +433,7 @@ function hydrate() {
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
       if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
-      if (['deals', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
+      if (['deals', 'profile', 'allergies', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
   try {
@@ -700,6 +702,20 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+async function loadAvatarUrl(owner, path) {
+  if (!sb || !owner || !path) return;
+  const generation = accountGeneration;
+  try {
+    const { data, error } = await sb.storage.from('avatars').createSignedUrl(path, 60 * 60);
+    if (error) throw error;
+    if (generation !== accountGeneration || S.user?.id !== owner || S.user.avatarPath !== path) return;
+    S.user.avatarUrl = data?.signedUrl || null;
+    if (S.tab === 'settings') render();
+  } catch (error) {
+    console.warn('[MyPantry] profile photo could not be loaded', error);
+  }
+}
+
 function applySession(session, event) {
   const user = session?.user;
   if (!user) {
@@ -712,6 +728,7 @@ function applySession(session, event) {
     render(); return;
   }
   const previousEmail = S.user?.email;
+  const previousAvatarPath = S.user?.avatarPath || null;
   const changed = S.user?.id !== user.id;
   if (changed) {
     stopAppSessionTracking();
@@ -720,20 +737,63 @@ function applySession(session, event) {
     ++chatLoadRequest; ++chatRevision;
     $$('.toast', phone).forEach(t => t.remove());
     closeSheet(); S = freshState(); S.inv = [];
-    S.user = { id: user.id, email: user.email || '', name: user.user_metadata?.name || user.email?.split('@')[0] || 'User' };
+    S.user = { id: user.id, email: user.email || '', name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+      avatarPath: user.user_metadata?.avatar_path || null, avatarUrl: null };
     hydrate();
   } else {
     S.user.name = user.user_metadata?.name || S.user.name;
     S.user.email = user.email || S.user.email;
+    S.user.avatarPath = user.user_metadata?.avatar_path || null;
+    if (S.user.avatarPath !== previousAvatarPath) S.user.avatarUrl = null;
   }
   S.user.pendingEmail = user.new_email || '';
-  if (event === 'USER_UPDATED' && previousEmail !== user.email && S.tab === 'settings') render();
+  if (event === 'USER_UPDATED' && (previousEmail !== user.email || previousAvatarPath !== S.user.avatarPath) && S.tab === 'settings') render();
   if (event === 'PASSWORD_RECOVERY') { S.auth = 'recovery'; render(); return; }
   // Refreshing a token or returning to the tab must not reset navigation or chat.
   if (changed || S.auth !== 'app') enterApp();
+  else if (S.user.avatarPath !== previousAvatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
 }
 
 /* ---------- Inventory logic ---------- */
+const ALLERGY_PRESETS = [
+  { id: 'milk', label: 'Milk', terms: ['milk', 'cream', 'cheese', 'butter', 'yogurt', 'dairy', 'parmesan', 'cheddar', 'mozzarella'] },
+  { id: 'eggs', label: 'Eggs', terms: ['egg', 'eggs', 'mayonnaise', 'mayo'] },
+  { id: 'fish', label: 'Fish', terms: ['fish', 'salmon', 'tuna', 'cod', 'tilapia', 'anchovy'] },
+  { id: 'shellfish', label: 'Shellfish', terms: ['shellfish', 'shrimp', 'prawn', 'crab', 'lobster', 'scallop', 'clam', 'mussel', 'oyster'] },
+  { id: 'tree nuts', label: 'Tree nuts', terms: ['tree nut', 'almond', 'cashew', 'walnut', 'pecan', 'pistachio', 'hazelnut', 'macadamia'] },
+  { id: 'peanuts', label: 'Peanuts', terms: ['peanut', 'peanuts'] },
+  { id: 'wheat', label: 'Wheat', terms: ['wheat', 'flour', 'bread', 'pasta', 'noodle', 'tortilla', 'cracker', 'cereal', 'oats'] },
+  { id: 'soy', label: 'Soy', terms: ['soy', 'soybean', 'tofu', 'edamame', 'tempeh'] },
+  { id: 'sesame', label: 'Sesame', terms: ['sesame', 'tahini'] }
+];
+const normalizeAllergy = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+function allergyList(source = S.prefs?.allergies) {
+  if (!Array.isArray(source)) return [];
+  return [...new Set(source.map(normalizeAllergy).filter(value => value && value.length <= 50))].slice(0, 20);
+}
+function allergyLabel(value) {
+  const normalized = normalizeAllergy(value);
+  return ALLERGY_PRESETS.find(item => item.id === normalized)?.label
+    || normalized.replace(/\b\w/g, letter => letter.toUpperCase());
+}
+function includesWordPhrase(words, phrase) {
+  const wanted = shopWords(phrase);
+  return !!wanted.length && words.some((_, at) => wanted.every((word, offset) => words[at + offset] === word));
+}
+function matchingRecipeAllergies(recipe) {
+  const selected = allergyList();
+  if (!selected.length) return [];
+  const text = [recipe.name, recipe.main, recipe.type, ...(recipe.kw || []),
+    ...recipe.ing.flatMap(ingredient => [ingredient.m, ingredient.label]),
+    ...(recipe.steps || []), JSON.stringify(recipe.subs || {})].join(' ');
+  const words = shopWords(text);
+  return selected.filter(allergy => {
+    const preset = ALLERGY_PRESETS.find(item => item.id === allergy);
+    return (preset?.terms || [allergy]).some(term => includesWordPhrase(words, term));
+  });
+}
+const recipeAllowed = recipe => matchingRecipeAllergies(recipe).length === 0;
+const recipeCandidates = () => RECIPES.filter(recipeAllowed);
 const findItems = m => matchingFoodItems(m);
 const has = m => findItems(m).some(item => daysLeft(item) >= 0);
 const canMake = r => r.ing.every(g => has(g.m));
@@ -749,9 +809,9 @@ function recipeUrgency(r) {
 }
 function score(r) {
   const u = recipeUrgency(r);
-  return (S.prefs[r.main] || 0) * 2 + (S.prefs[r.type] || 0) + (u <= 3 ? .6 : 0);
+  return (Number(S.prefs[r.main]) || 0) * 2 + (Number(S.prefs[r.type]) || 0) + (u <= 3 ? .6 : 0);
 }
-const makeable = () => RECIPES.filter(canMake).sort((a, b) => score(b) - score(a));
+const makeable = () => recipeCandidates().filter(canMake).sort((a, b) => score(b) - score(a));
 
 function snapshot() { return JSON.stringify(S.inv); }
 function restore(snap) { S.inv = JSON.parse(snap); }
@@ -927,13 +987,14 @@ function dupOf(item) {
   }).sort(byExp);
 }
 function learn(r) {
-  S.prefs[r.main] = (S.prefs[r.main] || 0) + 1;
-  S.prefs[r.type] = (S.prefs[r.type] || 0) + 1;
+  S.prefs[r.main] = (Number(S.prefs[r.main]) || 0) + 1;
+  S.prefs[r.type] = (Number(S.prefs[r.type]) || 0) + 1;
   const el = $('#learnChip'); if (el) el.textContent = learnText();
   persist();
 }
 function learnText() {
-  const top = Object.entries(S.prefs).sort((a, b) => b[1] - a[1]).slice(0, 2).map(e => e[0]);
+  const top = Object.entries(S.prefs).filter(([, value]) => Number.isFinite(value))
+    .sort((a, b) => b[1] - a[1]).slice(0, 2).map(e => e[0]);
   return top.length ? `Tuned to you: ${top.join(' · ')}` : 'Watch 5 sec or tap ♥ to tune your feed';
 }
 
@@ -973,6 +1034,8 @@ function render() {
   syncDemoToolsVisibility();
   const wantsCamera = S.auth === 'app' && S.tab === 'scan' && S.scan?.stage === 'camera' && !isDemoAccount();
   if (!wantsCamera) stopCameraPreview();
+  const wantsProfileCamera = S.auth === 'app' && S.tab === 'settings' && S.setPage === 'profile' && !!S.profileCamera;
+  if (!wantsProfileCamera) stopProfileCamera();
   const keepScroll = $('.scroll', app)?.scrollTop || 0;
   const prevKey = app.dataset.key;
   let html = '';
@@ -992,6 +1055,7 @@ function afterRender(scrollTop) {
   if (S.auth === 'app' && S.tab === 'home') { const cs = $('#chatScroll'); if (cs) cs.scrollTop = cs.scrollHeight; }
   if (S.auth === 'app' && S.tab === 'reels') mountReels();
   attachCameraPreview();
+  attachProfileCamera();
   bindForms();
 }
 
@@ -1013,14 +1077,13 @@ function renderAuth() {
     <div class="auth-hero">${LOGO}<h1>Know what's in your kitchen.</h1><p>Sign in to see what you have, what's going bad, and what to cook tonight.</p></div>
     <div class="err" id="loginErr" ${configError || S.authError ? '' : 'hidden'}>${ic('alert')}<span>${esc(configError || S.authError || '')}</span></div>
     <div class="field"><label for="li_email">Email</label><input class="input" id="li_email" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(S.lastEmail || '')}"></div>
-    <div class="field"><label for="li_pw">Password</label><div class="pw-wrap"><input class="input" id="li_pw" aria-describedby="li_pw_hint" type="password" autocomplete="current-password" placeholder="Your password"><button type="button" data-act="showpw" data-arg="li_pw">Show</button></div><span class="hint" id="li_pw_hint">New passwords require at least 8 characters and one symbol (e.g., ! or #).</span></div>
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <span class="hint">You stay signed in until you sign out</span>
-      <button type="button" class="link" data-act="auth" data-arg="forgot">Forgot password?</button>
+    <div class="field login-password">
+      <div class="field-heading"><label for="li_pw">Password</label><button type="button" class="link" data-act="auth" data-arg="forgot">Forgot password?</button></div>
+      <div class="pw-wrap"><input class="input" id="li_pw" aria-describedby="li_pw_hint" type="password" autocomplete="current-password" placeholder="Your password"><button type="button" data-act="showpw" data-arg="li_pw">Show</button></div>
+      <span class="hint" id="li_pw_hint">New passwords require at least 8 characters and one symbol (e.g., ! or #).</span>
     </div>
     <button class="btn btn-primary" type="submit">Sign in</button>
-    <div class="spacer"></div>
-    <div class="auth-foot">New to MyPantry? <button type="button" class="link" data-act="auth" data-arg="signup">Create an account</button></div>
+    <button class="btn btn-auth-secondary" type="button" data-act="auth" data-arg="signup">Create an account</button>
   </form></div>`;
 
   if (a === 'forgot') return `<div class="scroll"><form class="auth" id="forgotForm" novalidate>
@@ -1159,7 +1222,7 @@ async function ask(text) {
       method: 'POST', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseKey,
         Authorization: `Bearer ${data.session.access_token}` },
-      body: JSON.stringify({ message: text, history: chatHistory.slice(-10) })
+      body: JSON.stringify({ message: text, history: chatHistory.slice(-10), allergies: allergyList() })
     });
     const result = await response.json();
     if (!response.ok || typeof result.answer !== 'string') throw new Error(result.error || 'Chat is unavailable. Please try again.');
@@ -1260,8 +1323,8 @@ async function reply(text) {
   if (cKey) {
     const type = CUISINES[cKey];
     const list = makeable().filter(r => r.type === type);
-    const near = RECIPES.filter(r => r.type === type && canMakeWithSub(r));
-    const missing = RECIPES.filter(r => r.type === type && !canMake(r) && !canMakeWithSub(r));
+    const near = recipeCandidates().filter(r => r.type === type && canMakeWithSub(r));
+    const missing = recipeCandidates().filter(r => r.type === type && !canMake(r) && !canMakeWithSub(r));
     if (list.length || near.length) {
       return `<p>${type} tonight, got it. ${list.length ? `You can make ${list.length === 1 ? 'this' : 'these'} with what you have:` : ''}</p>${list.slice(0, 3).map(r => rcard(r)).join('')}${near.map(subBlock).join('')}`;
     }
@@ -1278,7 +1341,7 @@ async function reply(text) {
     const list = makeable();
     if (!list.length) return '<p>You don\'t have enough ingredients to make anything yet. Try adding more food to your pantry.</p>';
     const byUrg = [...list].sort((a, b) => recipeUrgency(a) - recipeUrgency(b));
-    const near = RECIPES.filter(canMakeWithSub).slice(0, 1);
+    const near = recipeCandidates().filter(canMakeWithSub).slice(0, 1);
     return `<p>Here are easy meals you can make right now. I put the ones that use food going bad first:</p>${byUrg.slice(0, 3).map(r => rcard(r)).join('')}${near.map(subBlock).join('')}`;
   }
 
@@ -1589,12 +1652,107 @@ const DETECT = {
 let cameraStream = null;
 let cameraOwner = null;
 let cameraRequest = 0;
+let profileCameraStream = null;
+let profileCameraRequest = 0;
 
 function stopCameraPreview() {
   ++cameraRequest;
   if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
   cameraStream = null;
   cameraOwner = null;
+}
+function stopProfileCamera() {
+  ++profileCameraRequest;
+  if (profileCameraStream) profileCameraStream.getTracks().forEach(track => track.stop());
+  profileCameraStream = null;
+}
+function attachProfileCamera() {
+  if (!profileCameraStream || !S.profileCamera || S.setPage !== 'profile') return;
+  const video = $('#profileCameraFeed');
+  if (!video) return;
+  video.srcObject = profileCameraStream;
+  video.play?.().catch(() => {});
+  const shutter = $('[data-act="profileShutter"]');
+  if (shutter) shutter.disabled = false;
+}
+async function startProfileCamera() {
+  stopProfileCamera();
+  S.profileError = null;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    S.profileCamera = { state: 'fallback', error: 'Live camera preview is unavailable. Use your device camera button or choose a photo.' };
+    render();
+    return;
+  }
+  S.profileCamera = { state: 'requesting', error: null };
+  render();
+  const request = ++profileCameraRequest;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 1280 } },
+      audio: false
+    });
+    if (request !== profileCameraRequest || S.setPage !== 'profile' || !S.profileCamera) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    profileCameraStream = stream;
+    S.profileCamera = { state: 'live', error: null };
+    render();
+  } catch (error) {
+    if (request !== profileCameraRequest || S.setPage !== 'profile') return;
+    S.profileCamera = { state: 'fallback', error: error?.name === 'NotAllowedError'
+      ? 'Camera access was denied. Allow it in your browser settings, or choose a photo.'
+      : 'The camera could not start. Use your device camera button or choose a photo.' };
+    render();
+  }
+}
+function blobFromDataUrl(dataUrl) {
+  const [header, encoded] = String(dataUrl).split(',');
+  const type = /data:([^;]+)/.exec(header)?.[1] || 'image/jpeg';
+  const binary = atob(encoded || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+function squareAvatar(source, width, height, mirror = false) {
+  const side = Math.min(width, height);
+  if (!side) throw new Error("Couldn't read that photo. Please try another.");
+  const sx = (width - side) / 2, sy = (height - side) / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 640;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error("Couldn't prepare that photo. Please try another.");
+  if (mirror) { ctx.translate(640, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(source, sx, sy, side, side, 0, 0, 640, 640);
+  const url = canvas.toDataURL('image/jpeg', 0.86);
+  return { url, blob: blobFromDataUrl(url) };
+}
+async function profilePhotoFromFile(file) {
+  const url = await photoImage(file);
+  const image = await new Promise((resolve, reject) => {
+    const candidate = new Image();
+    candidate.onload = () => resolve(candidate);
+    candidate.onerror = () => reject(new Error("Couldn't read that photo. Please try a JPG or PNG."));
+    candidate.src = url;
+  });
+  return squareAvatar(image, image.naturalWidth || image.width, image.naturalHeight || image.height);
+}
+function setProfileDraft(draft) {
+  stopProfileCamera();
+  S.profileCamera = null;
+  S.profileDraft = draft;
+  S.profileError = null;
+  render();
+}
+function captureProfilePhoto() {
+  const video = $('#profileCameraFeed');
+  if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    S.profileError = 'The camera is still starting. Try again in a moment.';
+    render();
+    return;
+  }
+  try { setProfileDraft(squareAvatar(video, video.videoWidth, video.videoHeight, true)); }
+  catch (error) { S.profileError = error.message; render(); }
 }
 function attachCameraPreview() {
   if (!cameraStream || cameraOwner !== S.scan || S.scan?.stage !== 'camera') return;
@@ -2089,7 +2247,7 @@ const REEL_BATCH = 8;
 // of the catalog ranked by how much of it you already own and what you tend to like.
 function rankReels() {
   const can = makeable();
-  const others = RECIPES.filter(r => !canMake(r)).map(r => {
+  const others = recipeCandidates().filter(r => !canMake(r)).map(r => {
     const miss = missingOf(r).length;
     return { r, miss, have: (r.ing.length - miss) / r.ing.length, seen: S.watched.has(r.id) ? 1 : 0 };
   });
@@ -2156,15 +2314,16 @@ function renderSaved() {
         <button class="btn btn-sm" style="background:#fff;color:#111" data-act="reelView" data-arg="feed">Browse reels</button></div></div>`
     : `<div class="saved-list">${list.map(r => {
         const miss = pantryReady ? shopNeeds(r) : [];
-        const ok = pantryReady && !miss.length;
+        const blocked = matchingRecipeAllergies(r);
+        const ok = pantryReady && !miss.length && !blocked.length;
         return `<div class="saved-card">
           <button class="saved-main" data-act="recipe" data-arg="${r.id}" aria-label="Open ${esc(r.name)}">
             <span class="saved-thumb" style="background:${r.bg}">${r.emoji}</span>
             <span class="saved-txt"><b>${esc(r.name)}</b><span>${r.time} min · Easy · ${r.type}</span>
-              <span class="saved-status ${ok ? 'can' : 'cant'}">${!pantryReady ? 'Pantry unavailable; check again soon' : ok ? `${ic('check')} Ingredients appear to be on hand` : `Check ${esc(miss.map(({ ingredient }) => needName(ingredient)).join(', '))}`}</span></span>
+              <span class="saved-status ${ok ? 'can' : 'cant'}">${blocked.length ? `Matches your allergy list: ${esc(blocked.map(allergyLabel).join(', '))}` : !pantryReady ? 'Pantry unavailable; check again soon' : ok ? `${ic('check')} Ingredients appear to be on hand` : `Check ${esc(miss.map(({ ingredient }) => needName(ingredient)).join(', '))}`}</span></span>
           </button>
           <div class="saved-actions">
-            ${pantryReady ? ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Shop ingredients</button>` : ''}
+            ${pantryReady && !blocked.length ? ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Shop ingredients</button>` : ''}
             <button class="sa-ghost" data-act="unsave" data-arg="${r.id}" aria-label="Remove ${esc(r.name)} from saved">${ic('trash')} Remove</button>
           </div></div>`;
       }).join('')}</div>`;
@@ -2246,11 +2405,13 @@ function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.i
 
 function recipeSheet(r) {
   const pantryReady = sync === 'synced';
-  const shopNeeded = pantryReady && shopNeeds(r).length > 0;
-  const canUse = pantryReady && canMake(r) && !shopNeeded;
+  const blocked = matchingRecipeAllergies(r);
+  const shopNeeded = !blocked.length && pantryReady && shopNeeds(r).length > 0;
+  const canUse = !blocked.length && pantryReady && canMake(r) && !shopNeeded;
   return `<div class="sheet-head"><h2>${esc(r.name)}</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body">
     <div class="recipe-hero" style="background:${r.bg}">${r.emoji}</div>
+    ${blocked.length ? `<div class="allergy-warning">${ic('alert')}<span><b>Matches your allergy list</b>${esc(blocked.map(allergyLabel).join(', '))}. Check every product label and preparation method before eating.</span></div>` : ''}
     <div class="tagrow"><span class="tag">⏱ ${r.time} min</span><span class="tag">Easy</span><span class="tag">${r.type}</span><span class="tag">Serves ${r.serves}</span></div>
     <div><div class="lbl" style="margin-bottom:4px">Ingredients ${canUse ? `· you have all ${r.ing.length}` : ''}</div>
     <ul class="ing-list">${r.ing.map(g => {
@@ -2259,7 +2420,7 @@ function recipeSheet(r) {
       const sub = !it && !checkDate && r.subs && r.subs[g.m];
       return `<li><span class="em">${it ? (it.emoji || '📦') : '➖'}</span><span>${esc(g.label)}<span class="amt">${!pantryReady ? 'Pantry not loaded' : it ? `Listed: ${qtyText(it.qty, it.unit)}${matches.length > 1 ? ' and more' : ''}` : checkDate ? 'Matching pantry food needs a date check' : sub ? 'Missing; see substitution below' : 'Not on your pantry list'}</span></span>${it ? pillFor(it) : `<span class="pill soon">${!pantryReady ? 'Wait' : checkDate ? 'Check' : 'Need'}</span>`}</li>`;
     }).join('')}</ul></div>
-    ${r.subs && pantryReady && !canUse ? `<div class="sub-card">${esc(Object.values(r.subs)[0].text)}</div>` : ''}
+    ${!blocked.length && r.subs && pantryReady && !canUse ? `<div class="sub-card">${esc(Object.values(r.subs)[0].text)}</div>` : ''}
     <div><div class="lbl" style="margin-bottom:6px">Steps</div><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>
   </div>
   <div class="sheet-foot">${canUse ? `<button class="btn btn-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : ''}
@@ -2329,7 +2490,7 @@ function shopNeeds(r) {
   });
 }
 function shopRecipeChoices() {
-  const options = RECIPES.map(r => {
+  const options = recipeCandidates().map(r => {
     const needs = shopNeeds(r);
     return { r, needs, owned: r.ing.length - needs.length };
   }).filter(option => option.needs.length);
@@ -2366,17 +2527,77 @@ function renderAccountSettings(kind) {
     <button class="btn btn-ghost" type="button" data-act="dealsBack">Cancel</button>
   </form></div>`;
 }
+function profileAvatar(url, name, className = 'av') {
+  const initial = String(name || 'User').trim().charAt(0).toUpperCase() || 'U';
+  return `<div class="${className}">${url ? `<img src="${esc(url)}" alt="${esc(name || 'User')}'s profile photo">` : esc(initial)}</div>`;
+}
+function renderProfileSettings() {
+  const u = S.user || { name: 'User', email: '' };
+  if (S.profileCamera) {
+    const live = S.profileCamera.state !== 'fallback';
+    const scene = live
+      ? `<video id="profileCameraFeed" class="camera-feed profile-camera-feed" autoplay muted playsinline aria-label="Live front camera preview"></video>${S.profileCamera.state === 'requesting' ? '<div class="camera-status" role="status"><div class="spinner"></div>Starting camera…</div>' : ''}`
+      : `<div class="rc-empty">${ic('camera')}<b>Take a profile photo</b><span>Use your device camera or choose an existing photo.</span></div>`;
+    return `<div class="camera profile-camera" role="dialog" aria-label="Take profile photo">
+      <div class="cam-top"><button class="close" data-act="profileCameraClose" aria-label="Close camera">${ic('x')}</button><b>Profile photo</b><span style="width:34px"></span></div>
+      <div class="profile-viewfinder">${scene}</div>
+      <div class="cam-hint">${esc(S.profileCamera.error || (live ? 'Center your face, then tap the shutter.' : 'Choose how you want to add your photo.'))}</div>
+      <input type="file" id="profileCameraPick" accept="image/*" capture="user" hidden>
+      <input type="file" id="profilePhotoPick" accept="image/*" hidden>
+      <div class="cam-bottom"><label class="cam-side" for="profilePhotoPick" aria-label="Choose a photo" title="Choose a photo">${ic('image')}</label>
+        ${live ? `<button class="shutter" data-act="profileShutter" aria-label="Take photo" ${S.profileCamera.state === 'live' ? '' : 'disabled'}><i></i></button>` : `<label class="shutter" for="profileCameraPick" aria-label="Open device camera" role="button"><i></i></label>`}
+        <span class="cam-side-placeholder" aria-hidden="true"></span></div>
+    </div>`;
+  }
+  const preview = S.profileDraft?.url || u.avatarUrl;
+  return `<div class="appbar"><button class="back" data-act="profileBack">${ic('left')} Settings</button></div>
+    <div class="scroll"><div class="profile-editor">
+      <div class="profile-editor-heading"><h1>Profile photo</h1><p>Add a photo so your account feels like yours. Your photo is stored privately for your account.</p></div>
+      ${profileAvatar(preview, u.name, 'profile-avatar-large')}
+      ${S.profileError ? `<div class="err" role="alert">${ic('alert')}<span>${esc(S.profileError)}</span></div>` : ''}
+      ${S.profileLoading ? '<div class="profile-photo-status" role="status"><div class="spinner"></div>Preparing photo…</div>' : ''}
+      <div class="profile-photo-actions">
+        <button class="btn btn-ghost" data-act="profileCamera" ${S.profileLoading || S.profileSaving ? 'disabled' : ''}>${ic('camera')} Take a photo</button>
+        <label class="btn btn-ghost ${S.profileLoading || S.profileSaving ? 'disabled' : ''}" for="profilePhotoPick">${ic('image')} Choose from device</label>
+        <input type="file" id="profilePhotoPick" accept="image/*" hidden ${S.profileLoading || S.profileSaving ? 'disabled' : ''}>
+      </div>
+      ${S.profileDraft ? `<button class="btn btn-primary" data-act="profileSave" ${S.profileSaving ? 'disabled' : ''}>${S.profileSaving ? 'Saving…' : 'Save profile photo'}</button>` : ''}
+      ${u.avatarPath && !S.profileDraft ? `<button class="btn btn-ghost profile-remove" data-act="profileRemove" ${S.profileSaving ? 'disabled' : ''}>Remove current photo</button>` : ''}
+    </div></div>`;
+}
+function renderAllergySettings() {
+  const selected = allergyList(S.allergyDraft ?? allergyList());
+  const chosen = new Set(selected);
+  const presetIds = new Set(ALLERGY_PRESETS.map(item => item.id));
+  const custom = selected.filter(item => !presetIds.has(item));
+  return `<div class="appbar"><button class="back" data-act="allergyBack">${ic('left')} Settings</button></div>
+    <div class="scroll"><div class="allergy-editor">
+      <div><h1>Food allergies</h1><p>Select common allergens or add any ingredient you need to avoid.</p></div>
+      <div class="allergy-warning">${ic('alert')}<span><b>Use this as a suggestion filter, not a safety guarantee.</b> Recipes and product data may be incomplete, and this cannot detect cross-contact. Always check labels and preparation.</span></div>
+      <fieldset class="allergy-presets"><legend>Common allergens</legend><div>${ALLERGY_PRESETS.map(item => `<button type="button" class="allergy-chip ${chosen.has(item.id) ? 'on' : ''}" data-act="allergyToggle" data-arg="${esc(item.id)}" aria-pressed="${chosen.has(item.id)}">${chosen.has(item.id) ? ic('check') : ''}${esc(item.label)}</button>`).join('')}</div></fieldset>
+      <form id="allergyForm" class="allergy-custom" novalidate>
+        <div class="field"><label for="allergyInput">Add another allergy or ingredient</label><div class="allergy-input-row"><input class="input" id="allergyInput" maxlength="50" placeholder="e.g., Kiwi or sulfites" autocomplete="off"><button class="btn btn-ghost" type="submit">Add</button></div><span class="hint">Add one at a time. Up to 20 entries.</span></div>
+        <div class="field-err" id="allergyErr" ${S.allergyError ? '' : 'hidden'}>${esc(S.allergyError || '')}</div>
+      </form>
+      <div class="allergy-custom-list"><span class="lbl">Custom entries</span>${custom.length ? `<div>${custom.map(item => `<span class="allergy-tag">${esc(allergyLabel(item))}<button type="button" data-act="allergyRemove" data-arg="${esc(item)}" aria-label="Remove ${esc(allergyLabel(item))}">${ic('x')}</button></span>`).join('')}</div>` : '<p>No custom entries added.</p>'}</div>
+      <button class="btn btn-primary" data-act="allergySave">Save allergy preferences</button>
+      <button class="btn btn-ghost" data-act="allergyBack">Cancel</button>
+    </div></div>`;
+}
 function renderSettings() {
+  if (S.setPage === 'profile') return renderProfileSettings();
+  if (S.setPage === 'allergies') return renderAllergySettings();
   if (['username', 'password', 'email'].includes(S.setPage)) return renderAccountSettings(S.setPage);
   const u = S.user || { name: 'User', email: '' };
   const row = (icon, tint, color, title, small, right, act, arg) => `<${act ? `button class="set-row" data-act="${act}" ${arg ? `data-arg="${arg}"` : ''}` : 'div class="set-row"'}><span class="si" style="background:${tint};color:${color}">${ic(icon)}</span><span><b>${title}</b>${small ? `<small>${small}</small>` : ''}</span>${right}</${act ? 'button' : 'div'}>`;
   const chev = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">${P.right}</svg>`;
   return `<div class="appbar"><div><h1>Settings</h1></div></div>
   <div class="scroll">
-    <div class="profile"><div class="av">${esc(u.name[0])}</div><div><b>${esc(u.name)}</b><small>${esc(u.email)}</small></div></div>
+    <button class="profile" data-act="editProfile" aria-label="Edit profile photo for ${esc(u.name)}">${profileAvatar(u.avatarUrl, u.name)}<span><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span>${chev}</button>
     <div class="set-group"><span class="lbl">Preferences</span><div class="set-card">
       ${row('ruler', 'var(--sky-soft)', 'var(--sky)', 'Use metric units', S.metric ? 'Showing kg, g, L and mL' : 'Showing lb, oz, gal and fl oz', sw('sw_metric', S.metric, 'Use metric units'))}
       ${row('bell', 'var(--butter-soft)', 'var(--butter)', 'Spoil reminders', S.reminders ? 'Notify me 2 days before food spoils' : 'Off', sw('sw_rem', S.reminders, 'Spoil reminders'))}
+      ${row('alert', 'var(--tomato-soft)', 'var(--tomato)', 'Food allergies', allergyList().length ? `${plural(allergyList().length, 'item')} avoided in suggestions` : 'None added', chev, 'editAllergies')}
       ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Stay signed in', 'Sign out when using a shared device', '')}
     </div></div>
     <div class="set-group"><span class="lbl">Shopping</span><div class="set-card">
@@ -2395,6 +2616,59 @@ function renderSettings() {
     </div></div>
     <div class="version">MyPantry version 1.0</div>
   </div>`;
+}
+async function saveProfilePhoto() {
+  const draft = S.profileDraft, owner = S.user?.id, generation = accountGeneration;
+  if (!draft || !owner || S.profileSaving) return;
+  S.profileSaving = true; S.profileError = null; render();
+  try {
+    if (!sb || !auth || isDemoAccount()) throw new Error('Profile photos require your own signed-in account.');
+    const previousPath = S.user.avatarPath;
+    const path = `${owner}/profile-${Date.now()}.jpg`;
+    const { error: uploadError } = await sb.storage.from('avatars').upload(path, draft.blob, {
+      contentType: 'image/jpeg', cacheControl: '3600', upsert: true
+    });
+    if (uploadError) throw uploadError;
+    await auth.updateAvatarPath(path);
+    if (generation !== accountGeneration || S.user?.id !== owner) return;
+    S.user.avatarPath = path;
+    S.user.avatarUrl = draft.url;
+    try {
+      const { data, error } = await sb.storage.from('avatars').createSignedUrl(path, 60 * 60);
+      if (error) throw error;
+      if (data?.signedUrl) S.user.avatarUrl = data.signedUrl;
+    } catch (error) { console.warn('[MyPantry] saved profile photo signed URL failed', error); }
+    if (previousPath && previousPath !== path) {
+      const { error } = await sb.storage.from('avatars').remove([previousPath]);
+      if (error) console.warn('[MyPantry] previous profile photo cleanup failed', error);
+    }
+    S.profileDraft = null; S.profileSaving = false; S.setPage = null; render();
+    toast('Profile photo updated.', null, 'check');
+  } catch (error) {
+    if (generation !== accountGeneration || S.user?.id !== owner) return;
+    S.profileSaving = false;
+    S.profileError = error.message || 'The profile photo could not be saved. Please try again.';
+    render();
+  }
+}
+async function removeProfilePhoto() {
+  const owner = S.user?.id, path = S.user?.avatarPath, generation = accountGeneration;
+  if (!owner || !path || S.profileSaving) return;
+  S.profileSaving = true; S.profileError = null; render();
+  try {
+    if (!sb || !auth || isDemoAccount()) throw new Error('Profile photos require your own signed-in account.');
+    const { error } = await sb.storage.from('avatars').remove([path]);
+    if (error) throw error;
+    await auth.updateAvatarPath(null);
+    if (generation !== accountGeneration || S.user?.id !== owner) return;
+    S.user.avatarPath = null; S.user.avatarUrl = null; S.profileSaving = false; S.setPage = null; render();
+    toast('Profile photo removed.', null, 'check');
+  } catch (error) {
+    if (generation !== accountGeneration || S.user?.id !== owner) return;
+    S.profileSaving = false;
+    S.profileError = error.message || 'The profile photo could not be removed. Please try again.';
+    render();
+  }
 }
 function renderDeals() {
   const pantryReady = sync === 'synced';
@@ -2468,7 +2742,8 @@ async function doReset() {
   } else {
     S.inv = [];
   }
-  S.prefs = {}; S.liked.clear(); S.watched.clear(); S.chat = [];
+  const allergies = allergyList();
+  S.prefs = allergies.length ? { allergies } : {}; S.liked.clear(); S.watched.clear(); S.chat = [];
   persist();
   return true;
 }
@@ -2740,6 +3015,27 @@ const ACT = {
   },
   deals() { S.shopRecipeId = null; S.tab = 'settings'; S.setPage = 'deals'; render(); },
   dealsBack() { S.shopRecipeId = null; S.setPage = null; render(); },
+  editProfile() { S.profileDraft = null; S.profileCamera = null; S.profileError = null; S.profileLoading = false; S.profileSaving = false; S.setPage = 'profile'; render(); },
+  profileBack() { if (S.profileSaving) return; stopProfileCamera(); S.profileDraft = null; S.profileCamera = null; S.profileError = null; S.profileLoading = false; S.setPage = null; render(); },
+  profileCamera() { void startProfileCamera(); },
+  profileCameraClose() { stopProfileCamera(); S.profileCamera = null; S.profileError = null; render(); },
+  profileShutter() { captureProfilePhoto(); },
+  profileSave() { void saveProfilePhoto(); },
+  profileRemove() { void removeProfilePhoto(); },
+  editAllergies() { S.allergyDraft = allergyList(); S.allergyError = null; S.setPage = 'allergies'; render(); },
+  allergyToggle(value) {
+    const selected = new Set(allergyList(S.allergyDraft));
+    selected.has(value) ? selected.delete(value) : selected.add(value);
+    S.allergyDraft = allergyList([...selected]); S.allergyError = null; render();
+  },
+  allergyRemove(value) { S.allergyDraft = allergyList(S.allergyDraft).filter(item => item !== normalizeAllergy(value)); S.allergyError = null; render(); },
+  allergySave() {
+    const selected = allergyList(S.allergyDraft);
+    if (selected.length) S.prefs.allergies = selected; else delete S.prefs.allergies;
+    S.allergyDraft = null; S.allergyError = null; S.reelShown = 0; S.reelMore = false; S.setPage = null;
+    persist(); render(); toast('Allergy preferences saved.', null, 'check');
+  },
+  allergyBack() { S.allergyDraft = null; S.allergyError = null; S.setPage = null; render(); },
   shopRetry() { sync = 'loading'; render(); void loadPantry(); },
   resetAsk() { openSheet(resetModal(), { center: true }); },
   async resetDo() { if (!await doReset()) return; resetAIChat(); S.conversationId = newUuid(); S.chat = []; ++chatLoadRequest; ++chatRevision; closeSheet(); render(); toast('Inventory reset. Reels start fresh.'); },
@@ -2809,6 +3105,7 @@ function enterApp() {
   if (!S.user?.id) return;
   void loadRemoteRecipes();
   S.auth = 'app'; S.chat = []; render();
+  if (S.user.avatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
   startAppSessionTracking();
   loadPantry(); loadWasteEvents(); loadUserAppState(); loadChatHistory();
 }
@@ -2844,6 +3141,40 @@ function bindForms() {
     const error = form.querySelector(selector); if (!error) return;
     error.hidden = false; error.querySelector('span').textContent = message;
   };
+  $$('#profilePhotoPick, #profileCameraPick', app).forEach(input => input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const owner = S.user?.id, generation = accountGeneration;
+    S.profileLoading = true; S.profileError = null;
+    try {
+      const draft = await profilePhotoFromFile(file);
+      if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'profile') return;
+      S.profileLoading = false;
+      setProfileDraft(draft);
+    } catch (error) {
+      if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'profile') return;
+      stopProfileCamera(); S.profileCamera = null; S.profileLoading = false;
+      S.profileError = error.message || 'That photo could not be prepared. Please try another.';
+      render();
+    }
+  }));
+  const allergyForm = $('#allergyForm');
+  if (allergyForm) allergyForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const input = $('#allergyInput');
+    const value = normalizeAllergy(input.value);
+    const selected = allergyList(S.allergyDraft);
+    if (value.length < 2 || value.length > 50 || !/[a-z0-9]/i.test(value)) {
+      S.allergyError = 'Enter an allergy or ingredient name between 2 and 50 characters.';
+    } else if (selected.includes(value)) {
+      S.allergyError = `${allergyLabel(value)} is already on your list.`;
+    } else if (selected.length >= 20) {
+      S.allergyError = 'You can save up to 20 allergy entries.';
+    } else {
+      S.allergyDraft = allergyList([...selected, value]); S.allergyError = null;
+    }
+    render();
+  });
   const emailForm = $('#emailForm');
   if (emailForm) emailForm.addEventListener('submit', async e => {
     e.preventDefault();
