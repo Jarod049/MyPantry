@@ -823,6 +823,30 @@ test('preset and custom allergies sync and remove matching recipe suggestions', 
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
   assert.equal(f.w.document.querySelector('.reel[data-id="scrambled"]'), null);
 });
+test('theme picker defaults to paprika and persists all palette choices with the account', async t => {
+  const f = boot({ id: 'theme-user', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  assert.equal(f.w.document.documentElement.dataset.palette, 'paprika');
+  f.click('[data-act="tab"][data-arg="settings"]');
+  assert.match(f.text(), /App themePaprika & Saffron/);
+  f.click('[data-act="openTheme"]');
+  const options = [...f.w.document.querySelectorAll('[data-act="themePick"]')];
+  assert.deepEqual(options.map(option => [option.querySelector('b').textContent, option.querySelector('small').textContent]), [
+    ['Paprika & Saffron', 'Warm paprika red, golden saffron and cream.'],
+    ['Tomato & Basil', 'Bright tomato coral, garden basil and soft sage.'],
+    ['Aubergine & Apricot', 'Deep aubergine, mellow apricot and warm ivory.'],
+    ['Classic Green', 'The original MyPantry basil, gold and cool white.']
+  ]);
+  f.click('[data-act="themePick"][data-arg="aubergine"]');
+  assert.equal(f.w.document.documentElement.dataset.palette, 'aubergine');
+  assert.match(f.text(), /App themeAubergine & Apricot/);
+  const local = JSON.parse(f.w.localStorage.getItem('mp_state_v2:theme-user'));
+  assert.equal(local.prefs.appearanceTheme, 'aubergine');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  const synced = f.queries.filter(query => query.table === 'user_app_state' && query.upsert).at(-1);
+  assert.equal(synced.upsert[0].recipe_preferences.appearanceTheme, 'aubergine');
+  f.click('[data-act="resetAsk"]'); f.click('[data-act="resetDo"]'); await settle();
+  assert.equal(f.w.document.documentElement.dataset.palette, 'aubergine', 'inventory reset preserves appearance');
+});
 test('reels feed shows only recipes you can make, then an option for ones needing more', async t => {
   const database = [pantryRow(1, 'Eggs', 12, 'ct', 'reeler'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'reeler'), pantryRow(3, 'Butter', 1, 'lb', 'reeler')];
   const f = boot({ id: 'reeler', database }); t.after(() => f.dom.window.close()); await tick();

@@ -33,6 +33,7 @@ const P = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   refresh: '<path d="M4 4v6h6"/><path d="M20 20v-6h-6"/><path d="M5.5 15a8 8 0 0 0 13.9 2M18.5 9A8 8 0 0 0 4.6 7"/>',
   ruler: '<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 7v4M10 7v3M14 7v4M18 7v3"/>',
+  palette: '<path d="M12 3a9 9 0 0 0 0 18h1.5a2 2 0 0 0 0-4H12a2 2 0 0 1 0-4h4a5 5 0 0 0 5-5c0-2.8-4-5-9-5Z"/><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="9.5" cy="6.5" r=".8" fill="currentColor" stroke="none"/><circle cx="14" cy="6.5" r=".8" fill="currentColor" stroke="none"/>',
   bell: '<path d="M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1M15 9v1M12 9v4h-1M9 16c1.7 1.3 4.3 1.3 6 0"/>',
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -48,7 +49,7 @@ const P = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'
 };
 const ic = (n, fill) => `<svg viewBox="0 0 24 24" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
-const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#1d6a4c"/><path d="M14 20h20v14a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V20Z" fill="#fff"/><path d="M12 16h24v4H12z" fill="#b9e4cd"/><path d="M24 11c3 0 5 2 5 5h-10c0-3 2-5 5-5Z" fill="#f2b632"/><circle cx="24" cy="28" r="3.2" fill="#1d6a4c"/></svg>';
+const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="var(--basil)"/><path d="M14 20h20v14a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V20Z" fill="#fff"/><path d="M12 16h24v4H12z" fill="var(--butter-soft)"/><path d="M24 11c3 0 5 2 5 5h-10c0-3 2-5 5-5Z" fill="var(--theme-accent)"/><circle cx="24" cy="28" r="3.2" fill="var(--basil)"/></svg>';
 
 /* ---------- Helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -268,6 +269,34 @@ const needName = g => {
 };
 
 /* ---------- State ---------- */
+const APP_THEMES = {
+  paprika: {
+    name: 'Paprika & Saffron',
+    description: 'Warm paprika red, golden saffron and cream.',
+    colors: ['#b43a2f', '#c47a12', '#fff8ee']
+  },
+  tomato: {
+    name: 'Tomato & Basil',
+    description: 'Bright tomato coral, garden basil and soft sage.',
+    colors: ['#d65332', '#397557', '#f3f7f1']
+  },
+  aubergine: {
+    name: 'Aubergine & Apricot',
+    description: 'Deep aubergine, mellow apricot and warm ivory.',
+    colors: ['#673653', '#d8753d', '#fff8f2']
+  },
+  basil: {
+    name: 'Classic Green',
+    description: 'The original MyPantry basil, gold and cool white.',
+    colors: ['#1d6a4c', '#f2b632', '#e9eeeb']
+  }
+};
+const normalizeTheme = value => Object.hasOwn(APP_THEMES, value) ? value : 'paprika';
+const visualTheme = () => normalizeTheme(S?.prefs?.appearanceTheme);
+function applyVisualTheme() {
+  document.documentElement.dataset.palette = visualTheme();
+}
+
 let S;
 function freshState() {
   return {
@@ -1030,6 +1059,7 @@ function closeSheet() { const s = $('#scrim'); if (s) s.remove(); }
 /* ---------- Render root ---------- */
 let reelCtl = null;
 function render() {
+  applyVisualTheme();
   unmountReels();
   syncDemoToolsVisibility();
   const wantsCamera = S.auth === 'app' && S.tab === 'scan' && S.scan?.stage === 'camera' && !isDemoAccount();
@@ -1044,7 +1074,7 @@ function render() {
   app.innerHTML = html;
   const key = S.auth + S.tab + (S.setPage || '') + (S.scan ? S.scan.stage : '');
   app.dataset.key = key;
-  const dark = S.auth === 'app' && (S.tab === 'reels' || (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage)));
+  const dark = S.auth === 'app' && (reelsUseDarkChrome() || (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage)));
   phone.classList.toggle('dark-chrome', dark);
   afterRender(prevKey === key ? keepScroll : 0);
 }
@@ -1164,7 +1194,7 @@ function tabbar() {
   const urgent = S.inv.filter(i => daysLeft(i) <= 2).length;
   const t = (id, label, icon) => `<button class="tab ${S.tab === id ? 'active' : ''}" data-act="tab" data-arg="${id}" aria-label="${label}" ${S.tab === id ? 'aria-current="page"' : ''}>
       <span class="tab-ic">${ic(icon)}${id === 'ing' && urgent ? `<span class="badge">${urgent}</span>` : ''}</span>${label}</button>`;
-  return `<nav class="tabbar ${S.tab === 'reels' ? 'on-dark' : ''}" aria-label="Main">
+  return `<nav class="tabbar ${reelsUseDarkChrome() ? 'on-dark' : ''}" aria-label="Main">
     ${t('home', 'Home', 'home')}
     ${t('ing', 'Ingredients', 'jar')}
     <button class="tab ${S.tab === 'scan' ? 'active' : ''}" data-act="tab" data-arg="scan" aria-label="Scan food"><span class="scanbtn">${ic('camera')}</span>Scan</button>
@@ -2499,6 +2529,10 @@ function feedEntries(rank) {
   if (!S.reelMore) return rank.can.length && extra.length ? [...rank.can, 'card:offer'] : [...rank.can];
   return [...rank.can, ...(extra.length ? ['card:more', ...extra] : []), 'card:end'];
 }
+function reelsUseDarkChrome() {
+  if (S.tab !== 'reels' || S.reelView === 'saved') return false;
+  return feedEntries(rankReels()).length > 0;
+}
 function reelSeg() {
   const n = S.saved.size, v = S.reelView || 'feed';
   const tab = (key, label) => `<button role="tab" class="${v === key ? 'on' : ''}" aria-selected="${v === key}" data-act="reelView" data-arg="${key}">${label}</button>`;
@@ -2512,7 +2546,7 @@ function renderReels() {
   const addBtn = `<button class="btn btn-sm" style="background:#fff;color:#111" data-act="tab" data-arg="scan">${ic('camera')} Add food</button>`;
   const hasExtra = rank.near.length + rank.rest.length > 0;
   if (!reelOrder.length) {
-    return `<div class="reels"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
+    return `<div class="reels empty-mode"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
       <div class="reels-empty"><div><div class="big-illus">🍳</div><p>You don't have enough ingredients to make anything yet. Try adding more food to your pantry</p>
       <div class="reels-empty-btns">${addBtn}${hasExtra ? `<button class="btn btn-sm reel-ghost-btn" data-act="reelMore" data-arg="on">${MORE_BTN}</button>` : ''}</div></div></div></div>`;
   }
@@ -2833,6 +2867,7 @@ function renderSettings() {
   <div class="scroll">
     <button class="profile" data-act="editProfile" aria-label="Edit profile photo for ${esc(u.name)}">${profileAvatar(u.avatarUrl, u.name)}<span><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span>${chev}</button>
     <div class="set-group"><span class="lbl">Preferences</span><div class="set-card">
+      ${row('palette', 'var(--basil-soft)', 'var(--basil)', 'App theme', APP_THEMES[visualTheme()].name, `<span class="theme-row-value"><span class="theme-row-preview">${APP_THEMES[visualTheme()].colors.map(color => `<i style="background:${color}"></i>`).join('')}</span>${chev}</span>`, 'openTheme')}
       ${row('ruler', 'var(--sky-soft)', 'var(--sky)', 'Use metric units', S.metric ? 'Showing kg, g, L and mL' : 'Showing lb, oz, gal and fl oz', sw('sw_metric', S.metric, 'Use metric units'))}
       ${row('bell', 'var(--butter-soft)', 'var(--butter)', 'Spoil reminders', S.reminders ? 'Notify me 2 days before food spoils' : 'Off', sw('sw_rem', S.reminders, 'Spoil reminders'))}
       ${row('alert', 'var(--tomato-soft)', 'var(--tomato)', 'Food allergies', allergyList().length ? `${plural(allergyList().length, 'item')} avoided in suggestions` : 'None added', chev, 'editAllergies')}
@@ -2948,6 +2983,18 @@ function storeSheet() {
   </div>
   <div class="sheet-foot"><button class="btn btn-primary" data-act="storeSave">Save store</button></div>`;
 }
+function themeSheet() {
+  const selected = visualTheme();
+  return `<div class="sheet-head"><h2>Choose app theme</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+  <div class="sheet-body theme-picker">
+    <p class="theme-picker-intro">Choose a culinary palette. Each theme automatically adapts to your device's light or dark appearance.</p>
+    <div class="theme-options">${Object.entries(APP_THEMES).map(([id, theme]) => `<button class="theme-option ${id === selected ? 'on' : ''}" data-act="themePick" data-arg="${id}" aria-pressed="${id === selected}">
+      <span class="theme-swatches" aria-hidden="true">${theme.colors.map(color => `<i style="background:${color}"></i>`).join('')}</span>
+      <span class="theme-option-copy"><b>${esc(theme.name)}</b><small>${esc(theme.description)}</small></span>
+      <span class="theme-check">${id === selected ? ic('check') : ''}</span>
+    </button>`).join('')}</div>
+  </div>`;
+}
 function resetModal() {
   return `<div class="icon-hero" style="background:var(--tomato-soft);color:var(--tomato)">${ic('trash')}</div>
     <h2>Reset your inventory?</h2>
@@ -2982,7 +3029,8 @@ async function doReset() {
     S.inv = [];
   }
   const allergies = allergyList();
-  S.prefs = allergies.length ? { allergies } : {}; S.liked.clear(); S.watched.clear(); S.chat = [];
+  const appearanceTheme = visualTheme();
+  S.prefs = { appearanceTheme, ...(allergies.length ? { allergies } : {}) }; S.liked.clear(); S.watched.clear(); S.chat = [];
   persist();
   return true;
 }
@@ -3265,6 +3313,16 @@ const ACT = {
   storeSheet() {
     openSheet(storeSheet());
     $('#zipIn').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 5); });
+  },
+  openTheme() { openSheet(themeSheet()); },
+  themePick(arg) {
+    const theme = normalizeTheme(arg);
+    S.prefs.appearanceTheme = theme;
+    applyVisualTheme();
+    persist();
+    closeSheet();
+    render();
+    toast(`${APP_THEMES[theme].name} theme applied.`, null, 'check');
   },
   storeSave() {
     const z = $('#zipIn').value; if (z && !/^\d{5}$/.test(z)) { $('#zipErr').hidden = false; $('#zipIn').classList.add('bad'); return; }
