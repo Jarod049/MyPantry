@@ -1056,6 +1056,7 @@ function afterRender(scrollTop) {
   if (S.auth === 'app' && S.tab === 'reels') mountReels();
   attachCameraPreview();
   attachProfileCamera();
+  mountReceiptEditor();
   bindForms();
 }
 
@@ -1141,8 +1142,23 @@ function renderApp() {
   else if (S.tab === 'scan') body = renderScan();
   else if (S.tab === 'reels') body = renderReels();
   else if (S.tab === 'settings') body = S.setPage === 'deals' ? renderDeals() : renderSettings();
-  const cam = (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage)) ? renderCamera() : '';
-  return `<div class="view page-content page-${S.tab}">${body}</div>${tabbar()}${cam}`;
+  const receiptWorking = S.scan?.mode === 'receipt' && S.scan?.stage === 'analyzing' && S.scan?.inAppBackground;
+  const cam = (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage) && !receiptWorking) ? renderCamera() : '';
+  return `<div class="view page-content page-${S.tab}">${receiptStatusBanner()}${body}</div>${tabbar()}${cam}`;
+}
+function receiptStatusBanner() {
+  const sc = S.scan;
+  if (!sc?.inAppBackground || sc.mode !== 'receipt' || S.tab === 'scan') return '';
+  if (sc.stage === 'analyzing') return `<div class="receipt-status processing" role="status" aria-live="polite">
+    <span class="receipt-status-spinner" aria-hidden="true"></span><span><b>Reading your receipt…</b><small>You can keep using MyPantry.</small></span>
+  </div>`;
+  if (sc.stage === 'review') return `<div class="receipt-status ready" role="status" aria-live="polite">
+    ${ic('check')}<span><b>Receipt processed</b><small>${plural(sc.items.length, 'item')} ready to review.</small></span><button data-act="receiptStatus">Review contents</button>
+  </div>`;
+  if (sc.stage === 'error') return `<div class="receipt-status failed" role="status" aria-live="polite">
+    ${ic('alert')}<span><b>Receipt wasn’t processed</b><small>${esc(sc.error || 'Open the scanner to try again.')}</small></span><button data-act="receiptStatus">View options</button>
+  </div>`;
+  return '';
 }
 function tabbar() {
   const urgent = S.inv.filter(i => daysLeft(i) <= 2).length;
@@ -1832,6 +1848,7 @@ async function captureCameraFrame() {
   const file = new File([blob], `${sc.mode}-${Date.now()}.jpg`, { type: 'image/jpeg' });
   stopCameraPreview();
   if (sc.mode === 'barcode') await scanBarcodePhoto(file);
+  else if (sc.mode === 'receipt') await beginReceiptEditor(file);
   else await scanPhoto(file);
 }
 function startScan(mode) {
@@ -1843,9 +1860,38 @@ function startScan(mode) {
 function renderScan() {
   const sc = S.scan;
   if (!sc || sc.stage === 'menu') return scanMenu();
+  if (sc.stage === 'preparing' || sc.stage === 'editing') return renderReceiptEditor(sc);
+  if (sc.mode === 'receipt' && sc.stage === 'analyzing' && sc.inAppBackground) return renderReceiptProcessing();
   if (sc.stage === 'review') return renderReview();
   if (sc.stage === 'done') return renderDone();
   return scanMenu();
+}
+function renderReceiptProcessing() {
+  return `<div class="appbar receipt-processing-head"><button class="close" data-act="scanCancel" aria-label="Cancel receipt processing">${ic('x')}</button><h1>Receipt scan</h1><span aria-hidden="true"></span></div>
+  <div class="scroll"><div class="receipt-processing-page" role="status" aria-live="polite">
+    <span class="receipt-processing-spinner" aria-hidden="true"></span><h2>Reading your receipt…</h2>
+    <p>We’ll keep working while you use another part of MyPantry.</p>
+    <button class="btn btn-primary" data-act="tab" data-arg="home">Continue to Home</button>
+  </div></div>`;
+}
+function cancelReceiptModal() {
+  return `<div class="icon-hero" style="background:var(--butter-soft);color:var(--butter)">${ic('receipt')}</div>
+    <h2>Cancel receipt processing?</h2>
+    <p>The current scan result will be discarded. You’ll need to submit the receipt again if you still want to add it.</p>
+    <button class="btn btn-danger" data-act="cancelReceiptScan">Cancel processing</button>
+    <button class="btn btn-ghost" data-act="closeSheet">Keep processing</button>`;
+}
+function discardScanReviewModal() {
+  const count = S.scan?.items?.length || 0;
+  return `<div class="icon-hero" style="background:var(--tomato-soft);color:var(--tomato)">${ic('trash')}</div>
+    <h2>Discard this scan?</h2>
+    <p>${plural(count, 'detected item')} haven’t been added to MyPantry yet. Discarding the review cannot be undone.</p>
+    <button class="btn btn-danger" data-act="discardScanReview">Discard review</button>
+    <button class="btn btn-ghost" data-act="closeSheet">Keep reviewing</button>`;
+}
+function dismissReceiptCancel() {
+  const scrim = $('#scrim');
+  if (scrim?.dataset.receiptCancel === 'true') closeSheet();
 }
 function scanMenu() {
   const o = (mode, icon, title, sub, tint, feat) => `<button class="opt ${feat ? 'featured' : ''}" data-act="${mode === 'manual' ? 'manual' : 'startScan'}" data-arg="${mode}">
@@ -1967,6 +2013,182 @@ function photoItem(r) {
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
     exp: label || estimate(cat, store), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
 }
+
+let receiptEditorImage = null;
+const freshReceiptCorners = () => ([
+  { x: .035, y: .035 }, { x: .965, y: .035 },
+  { x: .965, y: .965 }, { x: .035, y: .965 }
+]);
+
+function loadPhotoImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Couldn't open that receipt photo."));
+    image.src = url;
+  });
+}
+
+async function beginReceiptEditor(file) {
+  const sc = S.scan;
+  if (!file || !sc || sc.mode !== 'receipt' || sc.stage === 'preparing') return;
+  const started = performance.now();
+  stopCameraPreview();
+  sc.stage = 'preparing'; sc.error = null; render();
+  try {
+    const source = await photoImage(file);
+    const image = await loadPhotoImage(source);
+    if (S.scan !== sc) return;
+    receiptEditorImage = image;
+    sc.editor = { source, brightness: 0, contrast: 0, corners: freshReceiptCorners(), prepareMs: Math.round(performance.now() - started), error: null };
+    sc.stage = 'editing'; render();
+  } catch (error) {
+    if (S.scan !== sc) return;
+    sc.stage = 'error'; sc.error = error.message || 'That receipt photo could not be prepared.'; render();
+  }
+}
+
+function renderReceiptEditor(sc) {
+  if (sc.stage === 'preparing') return `<div class="photo-editor-loading"><div class="spinner"></div><b>Preparing your receipt…</b></div>`;
+  const ed = sc.editor || {};
+  return `<div class="photo-editor">
+    <div class="editor-head"><button class="back" data-act="photoRetake">${ic('left')} Retake</button><div><h1>Prepare receipt</h1><p>Place the four corners around the receipt, then adjust it only if needed.</p></div><button class="icon-btn" data-act="scanCancel" aria-label="Cancel">${ic('x')}</button></div>
+    <div class="editor-work"><canvas id="receiptEditorCanvas" aria-label="Receipt crop and perspective editor"></canvas><p class="editor-tip">Drag each corner to crop and straighten the receipt.</p></div>
+    <div class="editor-controls">
+      ${ed.error ? `<div class="editor-warning" role="alert">${ic('alert')}<span>${esc(ed.error)}</span></div>` : ''}
+      <label><span>Brightness</span><span class="range-ends"><small>Darker</small><input id="photoBrightness" type="range" min="-40" max="40" value="${Number(ed.brightness) || 0}"><small>Brighter</small></span></label>
+      <label><span>Contrast</span><span class="range-ends"><small>Softer</small><input id="photoContrast" type="range" min="-40" max="40" value="${Number(ed.contrast) || 0}"><small>Sharper</small></span></label>
+      <div class="editor-actions"><button class="btn btn-ghost" data-act="photoRotate">${ic('refresh')} Rotate</button><button class="btn btn-ghost" data-act="photoReset">Reset</button></div>
+      <button class="btn btn-primary" data-act="photoProcess">Use this photo</button>
+    </div>
+  </div>`;
+}
+
+function drawReceiptEditor() {
+  const canvas = $('#receiptEditorCanvas'), ed = S.scan?.editor, image = receiptEditorImage;
+  if (!canvas || !ed || !image) return;
+  const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+  const scale = Math.min(1, 900 / Math.max(1, iw), 780 / Math.max(1, ih));
+  canvas.width = Math.max(1, Math.round(iw * scale)); canvas.height = Math.max(1, Math.round(ih * scale));
+  const ctx = canvas.getContext('2d'); if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.filter = `brightness(${100 + Number(ed.brightness || 0)}%) contrast(${100 + Number(ed.contrast || 0)}%)`;
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height); ctx.filter = 'none';
+  const points = ed.corners.map(p => ({ x: p.x * canvas.width, y: p.y * canvas.height }));
+  ctx.fillStyle = 'rgba(0,0,0,.42)'; ctx.beginPath(); ctx.rect(0, 0, canvas.width, canvas.height);
+  ctx.moveTo(points[0].x, points[0].y); points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath(); ctx.fill('evenodd');
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath(); ctx.stroke();
+  for (const p of points) { ctx.fillStyle = '#2f7d4a'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+}
+
+function mountReceiptEditor() {
+  const canvas = $('#receiptEditorCanvas'), ed = S.scan?.editor;
+  if (!canvas || !ed || !receiptEditorImage) return;
+  drawReceiptEditor();
+  let active = -1;
+  const position = event => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
+  };
+  canvas.onpointerdown = event => {
+    const p = position(event);
+    active = ed.corners.reduce((best, corner, index) => {
+      const distance = Math.hypot(corner.x - p.x, corner.y - p.y);
+      return distance < best.distance ? { index, distance } : best;
+    }, { index: -1, distance: Infinity }).index;
+    canvas.setPointerCapture?.(event.pointerId);
+  };
+  canvas.onpointermove = event => {
+    if (active < 0) return;
+    const p = position(event), opposite = ed.corners[(active + 2) % 4];
+    if (Math.abs(p.x - opposite.x) < .08 || Math.abs(p.y - opposite.y) < .08) return;
+    ed.corners[active] = p; ed.error = null; drawReceiptEditor();
+  };
+  canvas.onpointerup = canvas.onpointercancel = () => { active = -1; };
+}
+
+function triangleMap(ctx, image, source, target) {
+  const [s0, s1, s2] = source, [d0, d1, d2] = target;
+  const det = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+  if (Math.abs(det) < .001) return;
+  const solve = values => ({
+    a: (values[0] * (s1.y - s2.y) + values[1] * (s2.y - s0.y) + values[2] * (s0.y - s1.y)) / det,
+    b: (values[0] * (s2.x - s1.x) + values[1] * (s0.x - s2.x) + values[2] * (s1.x - s0.x)) / det,
+    c: (values[0] * (s1.x * s2.y - s2.x * s1.y) + values[1] * (s2.x * s0.y - s0.x * s2.y) + values[2] * (s0.x * s1.y - s1.x * s0.y)) / det
+  });
+  const x = solve(target.map(p => p.x)), y = solve(target.map(p => p.y));
+  ctx.save(); ctx.beginPath(); ctx.moveTo(d0.x, d0.y); ctx.lineTo(d1.x, d1.y); ctx.lineTo(d2.x, d2.y); ctx.closePath(); ctx.clip();
+  ctx.setTransform(x.a, y.a, x.b, y.b, x.c, y.c); ctx.drawImage(image, 0, 0); ctx.restore();
+}
+
+function bilinearPoint(corners, u, v, width, height) {
+  const top = { x: corners[0].x * (1 - u) + corners[1].x * u, y: corners[0].y * (1 - u) + corners[1].y * u };
+  const bottom = { x: corners[3].x * (1 - u) + corners[2].x * u, y: corners[3].y * (1 - u) + corners[2].y * u };
+  return { x: (top.x * (1 - v) + bottom.x * v) * width, y: (top.y * (1 - v) + bottom.y * v) * height };
+}
+
+function rectifiedReceiptCanvas() {
+  const ed = S.scan?.editor, image = receiptEditorImage;
+  if (!ed || !image) throw new Error('Choose a receipt photo first.');
+  const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+  const c = ed.corners.map(p => ({ x: p.x * iw, y: p.y * ih }));
+  const top = Math.hypot(c[1].x - c[0].x, c[1].y - c[0].y), bottom = Math.hypot(c[2].x - c[3].x, c[2].y - c[3].y);
+  const left = Math.hypot(c[3].x - c[0].x, c[3].y - c[0].y), right = Math.hypot(c[2].x - c[1].x, c[2].y - c[1].y);
+  const scale = Math.min(1, 2200 / Math.max((top + bottom) / 2, (left + right) / 2));
+  const canvas = document.createElement('canvas'); canvas.width = Math.max(320, Math.round((top + bottom) / 2 * scale)); canvas.height = Math.max(320, Math.round((left + right) / 2 * scale));
+  const ctx = canvas.getContext('2d'); if (!ctx) throw new Error("Couldn't prepare that receipt photo.");
+  ctx.filter = `brightness(${100 + Number(ed.brightness || 0)}%) contrast(${100 + Number(ed.contrast || 0)}%)`;
+  const cols = 12, rows = 16;
+  for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+    const u0 = col / cols, u1 = (col + 1) / cols, v0 = row / rows, v1 = (row + 1) / rows;
+    const s00 = bilinearPoint(ed.corners, u0, v0, iw, ih), s10 = bilinearPoint(ed.corners, u1, v0, iw, ih), s01 = bilinearPoint(ed.corners, u0, v1, iw, ih), s11 = bilinearPoint(ed.corners, u1, v1, iw, ih);
+    const d00 = { x: u0 * canvas.width, y: v0 * canvas.height }, d10 = { x: u1 * canvas.width, y: v0 * canvas.height }, d01 = { x: u0 * canvas.width, y: v1 * canvas.height }, d11 = { x: u1 * canvas.width, y: v1 * canvas.height };
+    triangleMap(ctx, image, [s00, s10, s11], [d00, d10, d11]); triangleMap(ctx, image, [s00, s11, s01], [d00, d11, d01]);
+  }
+  ctx.filter = 'none'; return canvas;
+}
+
+function receiptQuality(canvas) {
+  const sample = document.createElement('canvas'), max = 420, scale = Math.min(1, max / Math.max(canvas.width, canvas.height));
+  sample.width = Math.max(1, Math.round(canvas.width * scale)); sample.height = Math.max(1, Math.round(canvas.height * scale));
+  const ctx = sample.getContext('2d', { willReadFrequently: true }); if (!ctx) return { ok: true };
+  ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
+  const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data, gray = new Float32Array(sample.width * sample.height);
+  let sum = 0, sumSq = 0;
+  for (let i = 0, p = 0; i < pixels.length; i += 4, p++) { const g = pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114; gray[p] = g; sum += g; sumSq += g * g; }
+  const count = gray.length, mean = sum / count, deviation = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
+  let lapSum = 0, lapSq = 0, lapCount = 0;
+  for (let y = 1; y < sample.height - 1; y++) for (let x = 1; x < sample.width - 1; x++) {
+    const at = y * sample.width + x, lap = gray[at - 1] + gray[at + 1] + gray[at - sample.width] + gray[at + sample.width] - 4 * gray[at];
+    lapSum += lap; lapSq += lap * lap; lapCount++;
+  }
+  const lapMean = lapSum / Math.max(1, lapCount), sharpness = lapSq / Math.max(1, lapCount) - lapMean * lapMean;
+  if (mean < 38) return { ok: false, message: 'This receipt is too dark to read reliably. Try again in brighter, even light.' };
+  if (mean > 242) return { ok: false, message: 'This receipt is washed out by too much light. Move away from glare and try again.' };
+  if (deviation < 15) return { ok: false, message: 'The receipt text does not have enough contrast to read reliably. Adjust the contrast or retake it in better light.' };
+  if (sharpness < 24) return { ok: false, message: 'This receipt is too blurry to read reliably. Hold the camera steady and retake the photo.' };
+  return { ok: true, internal: { mean: Math.round(mean), contrast: Math.round(deviation), sharpness: Math.round(sharpness) } };
+}
+
+async function rotateReceiptEditor() {
+  const sc = S.scan, ed = sc?.editor, image = receiptEditorImage; if (!ed || !image) return;
+  const canvas = document.createElement('canvas'), iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+  canvas.width = ih; canvas.height = iw; const ctx = canvas.getContext('2d'); if (!ctx) return;
+  ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); ctx.drawImage(image, 0, 0);
+  ed.source = canvas.toDataURL('image/jpeg', .9); receiptEditorImage = await loadPhotoImage(ed.source);
+  if (S.scan !== sc) return; ed.corners = freshReceiptCorners(); ed.error = null; render();
+}
+
+async function processReceiptEditor() {
+  const sc = S.scan, ed = sc?.editor; if (!ed || sc.stage !== 'editing') return;
+  try {
+    const canvas = rectifiedReceiptCanvas(), quality = receiptQuality(canvas);
+    if (!quality.ok) { ed.error = quality.message; render(); return; }
+    const image = canvas.toDataURL('image/jpeg', .88);
+    console.info('[MyPantry] receipt prepared', { prepareMs: ed.prepareMs, quality: quality.internal });
+    await scanPhoto(image, { prepareMs: ed.prepareMs, quality: quality.internal });
+  } catch (error) { ed.error = error.message || 'That receipt could not be prepared.'; render(); }
+}
 function combinePhotoPackages(items) {
   const combined = [];
   for (const item of items) {
@@ -1979,19 +2201,23 @@ function combinePhotoPackages(items) {
   }
   return combined;
 }
-async function scanPhoto(file) {
+async function scanPhoto(file, diagnostics = {}) {
   const sc = S.scan;
   if (!file || !sc || !realPhoto(sc) || sc.stage === 'analyzing') return;
   const t = PHOTO_TEXT[sc.mode];
   const generation = accountGeneration;
   const current = () => S.scan === sc && generation === accountGeneration;
-  const fail = message => { if (!current()) return; sc.stage = 'error'; sc.error = message; render(); };
-  sc.stage = 'analyzing'; sc.error = null; render();
+  const fail = message => { if (!current()) return; dismissReceiptCancel(); sc.stage = 'error'; sc.error = message; render(); };
+  sc.stage = 'analyzing'; sc.error = null;
+  if (sc.mode === 'receipt') { sc.inAppBackground = true; S.tab = 'home'; }
+  render();
+  const requestStarted = performance.now();
   let image;
-  try { image = await photoImage(file); } catch (error) { fail(error.message); return; }
+  try { image = typeof file === 'string' ? file : await photoImage(file); } catch (error) { fail(error.message); return; }
   if (!current()) return;
   sc.preview = image; render();
   const controller = new AbortController();
+  sc.abortController = controller;
   const timer = setTimeout(() => controller.abort(), 75000);
   try {
     const { data, error } = await sb.auth.getSession();
@@ -2003,6 +2229,8 @@ async function scanPhoto(file) {
     });
     let result = {};
     try { result = await response.json(); } catch (_) {}
+    const serverTiming = response.headers?.get?.('Server-Timing') || '';
+    console.info('[MyPantry] receipt scan finished', { totalMs: Math.round(performance.now() - requestStarted), serverTiming, code: result.code || (response.ok ? 'OK' : 'UNKNOWN'), ...diagnostics });
     if (!response.ok) throw new Error(result.error || 'Photo scanning is unavailable. Please try again.');
     if (!current()) return;
     const found = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(photoItem);
@@ -2011,10 +2239,10 @@ async function scanPhoto(file) {
       fail(result.readable === false ? t.bad : t.none);
       return;
     }
-    sc.items = items; sc.storeName = result.store_name || null; sc.stage = 'review'; render();
+    dismissReceiptCancel(); sc.items = items; sc.storeName = result.store_name || null; sc.stage = 'review'; render();
   } catch (error) {
     fail(error.name === 'AbortError' ? 'Reading the photo took too long. Please try again.' : error.message);
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); if (sc.abortController === controller) sc.abortController = null; }
 }
 function barcodeFileData(file) {
   if (file.type && !/^image\/(jpeg|png|webp|gif|heic|heif)$/.test(file.type)) return Promise.reject(new Error('Please use a bar code photo.'));
@@ -2040,6 +2268,7 @@ function validBarcode(value) {
   const sum = digits.reverse().reduce((total, digit, index) => total + digit * (index % 2 === 0 ? 3 : 1), 0);
   return (10 - (sum % 10)) % 10 === check;
 }
+const barcodeKey = value => String(value || '').replace(/\D/g, '').padStart(14, '0');
 const barcodeText = result => {
   const value = typeof result?.getText === 'function' ? result.getText() : result?.rawValue || result?.text;
   const digits = String(value || '').replace(/\D/g, '');
@@ -2176,6 +2405,9 @@ async function lookupBarcode(rawBarcode, sc) {
     try { result = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(result.error || 'Bar code lookup is unavailable. Try again.');
     if (!current()) return;
+    if (!result.barcode || barcodeKey(result.barcode) !== barcodeKey(barcode)) {
+      throw new Error('The product lookup returned information for a different bar code. Nothing was added.');
+    }
     const item = result.item || {};
     const brand = String(item.brand || '').trim();
     const productName = String(item.product_name || '').trim();
@@ -2183,9 +2415,12 @@ async function lookupBarcode(rawBarcode, sc) {
     const cat = normalizeCategory(name, item.category);
     const store = ['Fridge', 'Pantry', 'Freezer'].includes(item.storage) ? item.storage : 'Pantry';
     const unit = UNITS_US.includes(item.unit) ? item.unit : 'ct';
-    const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+    const numericQty = Number(item.quantity);
+    const qty = Number.isFinite(numericQty) && numericQty > 0 && numericQty <= 10000 ? numericQty : 1;
     const lookupSource = item.source === 'Open Food Facts' ? 'Open Food Facts' : 'USDA FoodData Central';
-    if (!name) throw new Error('The product database returned this bar code without a product name.');
+    if (!name || !/[a-z]/i.test(name) || /^(?:unknown|product|food|n\/?a|none|null|not available)$/i.test(name)) {
+      throw new Error('The product database returned this bar code without a usable product name. Nothing was added.');
+    }
     const detected = { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
       src: 'ai', exp: estimate(cat, store), on: true, barcode, lookupSource };
     sc.items = [detected]; sc.stage = 'review'; render();
@@ -2221,7 +2456,7 @@ function reviewCard(i) {
   const tmp = { exp: i.exp };
   const d = daysLeft(tmp);
   return `<div class="rv ${i.on ? '' : 'off'}" data-tid="${i.tid}">
-    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.lookupSource ? ` · ${esc(i.lookupSource)}` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
+    <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.lookupSource ? ` · ${esc(i.lookupSource)}` : ''}${i.barcode ? ` · UPC/EAN ${esc(i.barcode)}` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${unitWord(v, u)}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
@@ -2774,6 +3009,7 @@ const ACT = {
     if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; }
     S.tab = arg; render();
   },
+  receiptStatus() { S.tab = 'scan'; render(); },
   ask(arg) { if (S.tab !== 'home') { S.tab = 'home'; render(); } closeSheet(); ask(arg); },
   goSoon() { S.tab = 'ing'; S.ingView = 'soon'; render(); },
   askFromSoon() { S.tab = 'home'; render(); ask("What's going bad?"); },
@@ -2891,12 +3127,28 @@ const ACT = {
   demo(arg) { S.scan.demo = arg; if (S.scan.stage === 'error') S.scan.stage = 'camera'; render(); },
   retake() {
     stopCameraPreview();
+    receiptEditorImage = null;
     Object.assign(S.scan, { stage: 'camera', demo: 'good', preview: null, error: null, cameraState: isDemoAccount() ? null : 'requesting' });
     render();
     if (!isDemoAccount()) void startCameraPreview(S.scan);
   },
-  scanCancel() { stopCameraPreview(); S.scan = null; render(); },
+  scanCancel() {
+    if (S.scan?.mode === 'receipt' && S.scan.stage === 'analyzing') {
+      const scrim = openSheet(cancelReceiptModal(), { center: true }); scrim.dataset.receiptCancel = 'true'; return;
+    }
+    if (S.scan?.stage === 'review') { openSheet(discardScanReviewModal(), { center: true }); return; }
+    stopCameraPreview(); S.scan = null; render();
+  },
+  cancelReceiptScan() { closeSheet(); stopCameraPreview(); S.scan?.abortController?.abort(); S.scan = null; render(); },
+  discardScanReview() { closeSheet(); stopCameraPreview(); S.scan = null; render(); },
   cameraShutter() { void captureCameraFrame(); },
+  photoRetake() { ACT.retake(); },
+  photoReset() {
+    const ed = S.scan?.editor; if (!ed) return;
+    Object.assign(ed, { brightness: 0, contrast: 0, corners: freshReceiptCorners(), error: null }); render();
+  },
+  photoRotate() { void rotateReceiptEditor(); },
+  photoProcess(_, button) { if (button.disabled) return; button.disabled = true; void processReceiptEditor(); },
   shutter() {
     const sc = S.scan; if (sc.stage === 'analyzing' || realPhoto(sc) || realBarcode(sc)) return;
     sc.stage = 'analyzing'; render();
@@ -3189,7 +3441,12 @@ phone.addEventListener('click', e => {
 });
 phone.addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'photoCam' || t.id === 'photoPick') { stopCameraPreview(); void scanPhoto(t.files && t.files[0]); return; }
+  if (t.id === 'photoCam' || t.id === 'photoPick') {
+    stopCameraPreview();
+    if (S.scan?.mode === 'receipt') void beginReceiptEditor(t.files && t.files[0]);
+    else void scanPhoto(t.files && t.files[0]);
+    return;
+  }
   if (t.id === 'barcodeCam' || t.id === 'barcodePick') { stopCameraPreview(); void scanBarcodePhoto(t.files && t.files[0]); return; }
   if (t.id === 'sw_metric') { S.metric = t.checked; persist(); render(); toast(S.metric ? 'Showing metric units' : 'Showing US units', null, 'ruler'); }
   if (t.id === 'sw_rem') { S.reminders = t.checked; persist(); render(); }
@@ -3204,6 +3461,10 @@ phone.addEventListener('change', e => {
 });
 phone.addEventListener('input', e => {
   if (e.target.id === 'ingSearch') { S.ingQuery = e.target.value; $('#ingList').innerHTML = ingListHtml(); }
+  if ((e.target.id === 'photoBrightness' || e.target.id === 'photoContrast') && S.scan?.editor) {
+    S.scan.editor[e.target.id === 'photoBrightness' ? 'brightness' : 'contrast'] = Number(e.target.value);
+    S.scan.editor.error = null; drawReceiptEditor();
+  }
 });
 
 function bindForms() {

@@ -101,6 +101,21 @@ test('does not accept fuzzy USDA search results', async () => {
   assert.equal((await b.request('016000275287')).status, 404);
 });
 
+test('prefers a complete exact USDA record over a newer incomplete duplicate', async () => {
+  const b = boot({ foods: [
+    { fdcId: 10, gtinUpc: '0016000275287', description: 'CHEDDAR', publishedDate: '2026-10-01' },
+    { fdcId: 9, gtinUpc: '0016000275287', description: 'CHEDDAR CHEESE', brandName: 'ACME', foodCategory: 'Cheese', packageWeight: '8 oz', publishedDate: '2025-01-01' }
+  ] });
+  const body = await (await b.request('016000275287')).json();
+  assert.equal(body.item.name, 'Acme Cheddar Cheese');
+  assert.equal(body.item.quantity, 8);
+});
+
+test('rejects placeholder USDA names instead of sending them to the pantry', async () => {
+  const b = boot({ foods: [{ gtinUpc: '0016000275287', description: 'UNKNOWN' }] });
+  assert.equal((await b.request('016000275287')).status, 404);
+});
+
 test('retries USDA with the UPC body and accepts the equivalent EAN', async () => {
   const b = boot({ foods: request => request.query === '5200006775' ? [{
     fdcId: 2,

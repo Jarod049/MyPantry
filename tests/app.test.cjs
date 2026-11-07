@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good' } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -18,6 +18,27 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   w.matchMedia = () => ({ matches: false });
   w.HTMLElement.prototype.scrollTo = function () {};
   w.IntersectionObserver ||= class { observe() {} unobserve() {} disconnect() {} };
+  w.Image = class {
+    constructor() { this.naturalWidth = 1200; this.naturalHeight = 1800; this.width = 1200; this.height = 1800; }
+    set src(_value) { w.setTimeout(() => this.onload?.(), 0); }
+  };
+  const canvasContext = () => ({
+    filter: 'none', fillStyle: '', strokeStyle: '', lineWidth: 1,
+    drawImage() {}, clearRect() {}, beginPath() {}, rect() {}, moveTo() {}, lineTo() {}, closePath() {}, fill() {}, stroke() {}, arc() {},
+    save() {}, restore() {}, clip() {}, setTransform() {}, translate() {}, rotate() {}, scale() {}, putImageData() {},
+    getImageData(_x, _y, width, height) {
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const value = canvasQuality === 'dark' ? 10 : canvasQuality === 'blurry' ? 80 + Math.round(x / Math.max(1, width - 1) * 100) : (x + y) % 2 ? 235 : 25;
+        const at = (y * width + x) * 4;
+        data[at] = data[at + 1] = data[at + 2] = value; data[at + 3] = 255;
+      }
+      return { data };
+    }
+  });
+  w.HTMLCanvasElement.prototype.getContext = () => canvasContext();
+  w.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q==';
+  w.HTMLCanvasElement.prototype.toBlob = function (callback) { callback(new w.Blob([new Uint8Array([255, 216, 255, 224])], { type: 'image/jpeg' })); };
   if (camera) {
     Object.defineProperty(w.navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: camera.getUserMedia } });
     Object.defineProperties(w.HTMLVideoElement.prototype, {
@@ -26,15 +47,10 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
       videoHeight: { configurable: true, get: () => 720 }
     });
     w.HTMLVideoElement.prototype.play = async function () {};
-    w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {}, translate() {}, scale() {} });
-    w.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q==';
-    w.HTMLCanvasElement.prototype.toBlob = function (callback) {
-      callback(new w.Blob([new Uint8Array([255, 216, 255, 224])], { type: 'image/jpeg' }));
-    };
   }
   if (barcodeResult) {
     w.Image = class {
-      constructor() { this.naturalWidth = 1200; this.naturalHeight = 800; }
+      constructor() { this.naturalWidth = 1200; this.naturalHeight = 800; this.width = 1200; this.height = 800; }
       set src(_value) { w.setTimeout(() => this.onload?.(), 0); }
     };
     w.ZXingBrowser = { BrowserMultiFormatOneDReader: class {
@@ -216,6 +232,15 @@ const RECEIPT = { readable: true, store_name: 'Smith\'s', items: [
   { name: 'Frozen waffles', receipt_text: 'WAFFLES FRZ', category: 'Frozen', quantity: 1, unit: 'box', storage: 'Freezer' }
 ] };
 const settle = () => new Promise(r => setTimeout(r, 60));
+async function submitEditedReceipt(f, selector = '#photoCam') {
+  receiptPhoto(f, selector); await settle();
+  assert.ok(f.w.document.querySelector('#receiptEditorCanvas'));
+  f.click('[data-act="photoProcess"]'); await settle();
+}
+function openProcessedReceipt(f) {
+  const ready = f.w.document.querySelector('[data-act="receiptStatus"]');
+  assert.ok(ready, 'completed receipt status banner'); ready.click();
+}
 test('scan options open a live camera and the shutter captures one frame', async t => {
   const requests = [], tracks = [];
   const camera = { getUserMedia: async constraints => {
@@ -235,7 +260,10 @@ test('scan options open a live camera and the shutter captures one frame', async
   assert.ok(f.w.document.querySelector('#photoPick'));
   f.click('[data-act="cameraShutter"]');
   await settle();
+  assert.ok(f.w.document.querySelector('#receiptEditorCanvas'));
+  f.click('[data-act="photoProcess"]'); await settle();
   assert.equal(tracks[0].stopped, true);
+  openProcessedReceipt(f);
   assert.match(f.text(), /We found 3 items/);
 });
 test('camera permission failure keeps the file capture fallback available', async t => {
@@ -256,12 +284,15 @@ test('real receipt photo is read by the receipt-scan function, reviewed, and sav
   f.click('[data-act="tab"][data-arg="scan"]');
   f.click('[data-act="startScan"][data-arg="receipt"]');
   assert.equal(f.w.document.querySelector('.demo-toggle'), null);
-  receiptPhoto(f); await settle();
+  await submitEditedReceipt(f);
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/functions\/v1\/receipt-scan$/);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer test-session');
   assert.match(JSON.parse(calls[0].options.body).image, /^data:image\/jpeg;base64,/);
   assert.equal(JSON.parse(calls[0].options.body).kind, 'receipt');
+  assert.match(f.text(), /Receipt processed/);
+  assert.match(f.text(), /3 items ready to review/);
+  openProcessedReceipt(f);
   assert.match(f.text(), /We found 3 items/);
   assert.match(f.text(), /CHKN THIGHS/);
   f.click('[data-act="reviewToggle"][data-arg]'); // remove the first item
@@ -274,11 +305,99 @@ test('real receipt photo is read by the receipt-scan function, reviewed, and sav
   reloaded.click('[data-act="tab"][data-arg="ing"]');
   assert.match(reloaded.text(), /Frozen waffles/);
 });
+test('receipt processing moves to a global in-app banner and Scan opens the finished review', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let finish;
+  f.w.fetch = () => new Promise(resolve => { finish = resolve; });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle(); f.click('[data-act="photoProcess"]'); await tick();
+  assert.ok(f.w.document.querySelector('.page-home .receipt-status.processing'));
+  assert.match(f.text(), /You can keep using MyPantry/);
+  f.click('[data-act="tab"][data-arg="scan"]');
+  assert.ok(f.w.document.querySelector('.receipt-processing-page'));
+  assert.ok(f.w.document.querySelector('.tabbar'));
+  assert.equal(f.w.document.querySelector('.camera'), null);
+  f.click('[data-act="tab"][data-arg="ing"]');
+  assert.ok(f.w.document.querySelector('.page-ing .receipt-status.processing'));
+  f.click('[data-act="tab"][data-arg="reels"]');
+  assert.ok(f.w.document.querySelector('.page-reels .receipt-status.processing'));
+  finish({ ok: true, headers: { get: () => '' }, json: async () => RECEIPT }); await settle();
+  assert.ok(f.w.document.querySelector('.receipt-status.ready'));
+  f.click('[data-act="tab"][data-arg="scan"]');
+  assert.match(f.text(), /We found 3 items/);
+  assert.equal(f.w.document.querySelector('.receipt-status'), null);
+});
+test('cancelling an active receipt scan requires confirmation', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let finish, signal;
+  f.w.fetch = (_url, options) => { signal = options.signal; return new Promise(resolve => { finish = resolve; }); };
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle(); f.click('[data-act="photoProcess"]'); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="scanCancel"]');
+  assert.match(f.w.document.querySelector('.modal').textContent, /Cancel receipt processing/);
+  f.click('[data-act="closeSheet"]');
+  assert.ok(f.w.document.querySelector('.receipt-processing-page'));
+  f.click('[data-act="scanCancel"]'); f.click('[data-act="cancelReceiptScan"]');
+  assert.equal(signal.aborted, true);
+  assert.match(f.text(), /Logging Your Food/);
+  finish({ ok: true, headers: { get: () => '' }, json: async () => RECEIPT }); await settle();
+  assert.doesNotMatch(f.text(), /We found 3 items/);
+});
+test('receipt completion closes an open cancellation confirmation', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let finish;
+  f.w.fetch = () => new Promise(resolve => { finish = resolve; });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle(); f.click('[data-act="photoProcess"]'); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="scanCancel"]');
+  assert.ok(f.w.document.querySelector('[data-receipt-cancel="true"]'));
+  finish({ ok: true, headers: { get: () => '' }, json: async () => RECEIPT }); await settle();
+  assert.equal(f.w.document.querySelector('#scrim'), null);
+  assert.match(f.text(), /We found 3 items/);
+});
+test('leaving a completed scan review requires confirmation', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: true, headers: { get: () => '' }, json: async () => RECEIPT });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  await submitEditedReceipt(f); openProcessedReceipt(f);
+  f.click('[data-act="scanCancel"]');
+  assert.match(f.w.document.querySelector('.modal').textContent, /Discard this scan/);
+  assert.match(f.w.document.querySelector('.modal').textContent, /3 detected items/);
+  f.click('[data-act="closeSheet"]');
+  assert.match(f.text(), /We found 3 items/);
+  f.click('[data-act="scanCancel"]'); f.click('[data-act="discardScanReview"]');
+  assert.match(f.text(), /Start Logging Your Food/);
+});
+test('receipt editor offers correction tools and does not upload before approval', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let calls = 0; f.w.fetch = async () => { calls++; return { ok: true, json: async () => RECEIPT }; };
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle();
+  assert.equal(calls, 0);
+  assert.ok(f.w.document.querySelector('#receiptEditorCanvas'));
+  assert.ok(f.w.document.querySelector('#photoBrightness'));
+  assert.ok(f.w.document.querySelector('#photoContrast'));
+  assert.ok(f.w.document.querySelector('[data-act="photoRotate"]'));
+  assert.match(f.text(), /Drag each corner/);
+});
+test('unusable receipt photos are rejected locally without an upload', async t => {
+  for (const [canvasQuality, message] of [['dark', /too dark/i], ['blurry', /too blurry/i]]) {
+    const f = boot({ id: 'alice', database: [], canvasQuality }); t.after(() => f.dom.window.close()); await tick();
+    let calls = 0; f.w.fetch = async () => { calls++; return { ok: true, json: async () => RECEIPT }; };
+    f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+    receiptPhoto(f); await settle(); f.click('[data-act="photoProcess"]'); await settle();
+    assert.equal(calls, 0, canvasQuality);
+    assert.match(f.text(), message);
+    assert.ok(f.w.document.querySelector('#receiptEditorCanvas'));
+  }
+});
 test('receipt text from the AI is escaped on the review screen', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
   f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: true, store_name: '<b>X</b>', items: [{ name: '<img src=x onerror=alert(1)>', receipt_text: '<script>1</script>', category: 'Bad', quantity: -2, unit: 'tons', storage: 'Roof' }] }) });
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
-  receiptPhoto(f, '#photoPick'); await settle();
+  await submitEditedReceipt(f, '#photoPick');
+  openProcessedReceipt(f);
   assert.equal(f.w.document.querySelector('.rv img, .rv script'), null);
   assert.match(f.text(), /<img src=x/);
   assert.match(f.text(), /Other/);
@@ -288,11 +407,14 @@ test('receipt scan errors are shown and nothing is saved', async t => {
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
   f.w.fetch = async () => ({ ok: false, json: async () => ({ error: 'You reached the 20-receipt hourly limit.' }) });
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
-  receiptPhoto(f); await settle();
+  await submitEditedReceipt(f);
+  assert.match(f.text(), /Receipt wasn’t processed/);
+  f.click('[data-act="receiptStatus"]');
   assert.match(f.w.document.querySelector('.cam-error').textContent, /20-receipt hourly limit/);
   f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: false, store_name: null, items: [] }) });
   f.click('[data-act="retake"]'); assert.equal(f.w.document.querySelector('.cam-error'), null);
-  receiptPhoto(f); await settle();
+  await submitEditedReceipt(f);
+  f.click('[data-act="receiptStatus"]');
   assert.match(f.w.document.querySelector('.cam-error').textContent, /couldn't read this receipt/);
   assert.equal(database.length, 0);
 });
@@ -300,7 +422,7 @@ test('receipt result arriving after cancel or account switch is discarded', asyn
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
   let finish; f.w.fetch = () => new Promise(r => { finish = r; });
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
-  receiptPhoto(f); await settle();
+  receiptPhoto(f); await settle(); f.click('[data-act="photoProcess"]'); await settle();
   assert.match(f.text(), /Reading your receipt/);
   f.emit('SIGNED_IN', 'bob'); await tick();
   finish({ ok: true, json: async () => RECEIPT }); await settle();
@@ -357,7 +479,7 @@ test('bar code scan looks up USDA data, opens the editor, and inserts the confir
     requests++;
     assert.match(url, /\/functions\/v1\/barcode-lookup$/);
     assert.equal(JSON.parse(options.body).barcode, '016000275287');
-    return { ok: true, json: async () => ({ item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' } }) };
+    return { ok: true, json: async () => ({ barcode: '016000275287', item: { name: 'Cheddar Cheese', quantity: 8, unit: 'oz', category: 'Dairy & Eggs', storage: 'Fridge', source: 'USDA FoodData Central' } }) };
   };
   f.click('[data-act="tab"][data-arg="scan"]');
   f.click('[data-act="startScan"][data-arg="barcode"]');
@@ -370,6 +492,7 @@ test('bar code scan looks up USDA data, opens the editor, and inserts the confir
   assert.equal(f.w.document.querySelector('#f_name').value, 'Cheddar Cheese');
   assert.equal(f.w.document.querySelector('#f_cat').value, 'Dairy & Eggs');
   assert.match(f.text(), /USDA FoodData Central/);
+  assert.match(f.text(), /UPC\/EAN 016000275287/);
   assert.ok(f.w.document.querySelector('#f_exp').value);
   assert.equal(f.w.document.querySelector('#saveItemBtn').textContent, 'Save to MyPantry');
   f.click('#saveItemBtn');
@@ -386,7 +509,7 @@ test('failed bar code photo offers validated manual UPC lookup', async t => {
   let fail = true;
   f.w.fetch = async () => fail
     ? { ok: false, json: async () => ({ error: "We couldn't find this item in USDA FoodData Central." }) }
-    : { ok: true, json: async () => ({ item: { name: 'Manual UPC item', quantity: 1, unit: 'ct', category: 'Other', storage: 'Pantry' } }) };
+    : { ok: true, json: async () => ({ barcode: '012345678905', item: { name: 'Manual UPC item', quantity: 1, unit: 'ct', category: 'Other', storage: 'Pantry' } }) };
   f.click('[data-act="tab"][data-arg="scan"]');
   f.click('[data-act="startScan"][data-arg="barcode"]');
   barcodePhoto(f); await settle();
@@ -399,6 +522,21 @@ test('failed bar code photo offers validated manual UPC lookup', async t => {
   f.w.document.querySelector('#barcodeNumberForm').dispatchEvent(new f.w.Event('submit', { bubbles: true, cancelable: true }));
   await settle();
   assert.equal(f.w.document.querySelector('#f_name').value, 'Manual UPC item');
+});
+
+test('bar code lookup cannot substitute a different product response', async t => {
+  const database = [];
+  const f = boot({ id: 'alice', database, barcodeResult: '016000275287' }); t.after(() => f.dom.window.close()); await tick();
+  f.w.fetch = async () => ({ ok: true, json: async () => ({
+    barcode: '012345678905',
+    item: { name: 'Wrong product', quantity: 1, unit: 'ct', category: 'Other', storage: 'Pantry' }
+  }) });
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="startScan"][data-arg="barcode"]');
+  barcodePhoto(f); await settle();
+  assert.match(f.text(), /different bar code/);
+  assert.equal(database.length, 0);
+  assert.equal(f.w.document.querySelector('#saveItemBtn'), null);
 });
 test('actual app restores Alice, scopes pantry query, and signs out across reload', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();

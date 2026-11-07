@@ -80,8 +80,8 @@ export async function handler(req) {
     }
 
     const matches = foods
-      .filter(food => foodMatchesBarcode(food, barcode))
-      .sort((a, b) => String(b.publishedDate || b.publicationDate || '').localeCompare(String(a.publishedDate || a.publicationDate || '')));
+      .filter(food => foodMatchesBarcode(food, barcode) && usableProductName(food?.description))
+      .sort(compareFoodQuality);
     if (!matches.length) {
       console.info('[barcode-lookup] No exact USDA match', {
         barcode,
@@ -145,6 +145,30 @@ export function foodMatchesBarcode(food, barcode) {
   ].some(value => gtinMatches(value, barcode));
 }
 
+// USDA may return several historical records for one GTIN. A newly published
+// but incomplete record is not necessarily the best product description, so
+// prefer records with useful identity and package fields before using date as
+// a tie-breaker.
+function usableProductName(value) {
+  const name = String(value || '').replace(/[\u0000-\u001f<>]/g, '').trim();
+  return /[a-z]/i.test(name) && !/^(?:unknown|product|food|n\/?a|none|null|not available)$/i.test(name);
+}
+
+function foodQuality(food) {
+  let score = 0;
+  if (usableProductName(food?.description)) score += 8;
+  if (String(food?.brandName || '').trim()) score += 4;
+  if (String(food?.packageWeight || '').trim()) score += 3;
+  if (String(food?.foodCategory || '').trim()) score += 2;
+  if ([food?.gtinUpc, food?.gtin, food?.upc, food?.gtin_upc].some(value => String(value || '').trim())) score += 1;
+  return score;
+}
+
+function compareFoodQuality(a, b) {
+  return foodQuality(b) - foodQuality(a)
+    || String(b?.publishedDate || b?.publicationDate || '').localeCompare(String(a?.publishedDate || a?.publicationDate || ''));
+}
+
 export async function lookupOpenFoodFacts(barcode) {
   const fields = 'code,product_name,product_name_en,generic_name,brands,quantity,categories,categories_tags';
   const response = await fetch(`${OPEN_FOOD_FACTS_URL}${encodeURIComponent(barcode)}.json?fields=${fields}`, {
@@ -165,7 +189,7 @@ export function cleanOpenFoodFacts(product) {
   const label = clean(product?.product_name_en || product?.product_name || product?.generic_name)
     .replace(/\s+[\u2019']s\s*$/i, '').trim();
   const brand = clean(product?.brands).split(',')[0].trim();
-  if (!label) return null;
+  if (!usableProductName(label)) return null;
   const productName = withoutBrand(label, brand);
   const name = [brand, productName].filter(Boolean).join(' ');
   const food = {

@@ -176,6 +176,27 @@ h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-
 .appbar { padding: 6px 18px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: none; }
 .appbar h1 { font-size: 27px; font-weight: 700; }
 .appbar .sub { font-size: 13px; color: var(--ink-3); margin-top: 1px; }
+.receipt-status {
+  flex: none; width: min(calc(100% - 28px), 980px); margin: 0 auto 10px; padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--basil) 28%, var(--line)); border-radius: var(--r-md);
+  background: var(--surface); color: var(--ink); box-shadow: var(--shadow); display: flex; align-items: center; gap: 10px;
+  position: relative; z-index: 8;
+}
+.receipt-status > svg { width: 22px; height: 22px; flex: none; color: var(--basil); }
+.receipt-status > span:not(.receipt-status-spinner) { min-width: 0; display: grid; line-height: 1.25; }
+.receipt-status b { font-size: 14px; }
+.receipt-status small { color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-status button { margin-left: auto; flex: none; border: 0; border-radius: 9px; padding: 7px 10px; background: var(--basil); color: var(--on-brand); font-size: 12px; font-weight: 700; }
+.receipt-status.failed { border-color: color-mix(in srgb, var(--tomato) 32%, var(--line)); }
+.receipt-status.failed > svg { color: var(--tomato); }
+.receipt-status-spinner { width: 22px; height: 22px; flex: none; border: 3px solid var(--basil-soft); border-top-color: var(--basil); border-radius: 50%; animation: spin .8s linear infinite; }
+.receipt-processing-head { display: grid; grid-template-columns: 38px 1fr 38px; }
+.receipt-processing-head h1 { text-align: center; font-size: 20px; }
+.receipt-processing-page { width: min(calc(100% - 36px), 560px); min-height: 65%; margin: 0 auto; display: grid; justify-items: center; align-content: center; gap: 12px; text-align: center; }
+.receipt-processing-page h2 { font-size: 25px; }
+.receipt-processing-page p { max-width: 390px; margin: 0 0 8px; color: var(--ink-2); }
+.receipt-processing-page .btn { width: min(100%, 320px); }
+.receipt-processing-spinner { width: 54px; height: 54px; border: 5px solid var(--basil-soft); border-top-color: var(--basil); border-radius: 50%; animation: spin .8s linear infinite; }
 .icon-btn {
   width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface);
   display: grid; place-items: center; flex: none;
@@ -536,6 +557,22 @@ label.shutter, label.cam-side { cursor: pointer; }
 .cam-error .eh svg { width: 26px; height: 26px; color: var(--tomato); flex: none; }
 .cam-error b { font-size: 15.5px; line-height: 1.3; }
 .cam-error .btns { display: grid; gap: 8px; }
+.photo-editor { height: 100%; overflow-y: auto; background: var(--surface); padding: 18px 16px 110px; }
+.photo-editor-loading { height: 100%; display: grid; place-items: center; align-content: center; gap: 14px; color: var(--ink-2); }
+.editor-head { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: start; gap: 12px; max-width: 860px; margin: 0 auto 16px; }
+.editor-head h1 { font-size: 23px; margin: 0 0 3px; }
+.editor-head p { color: var(--ink-2); font-size: 13px; line-height: 1.35; margin: 0; }
+.editor-work { max-width: 760px; margin: 0 auto; }
+#receiptEditorCanvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 56vh; margin-inline: auto; border-radius: 18px; background: #171b19; box-shadow: var(--shadow); touch-action: none; cursor: crosshair; }
+.editor-tip { margin: 8px 0 16px; text-align: center; color: var(--ink-2); font-size: 13px; }
+.editor-controls { display: grid; gap: 14px; max-width: 760px; margin: 0 auto; }
+.editor-controls > label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.range-ends { display: grid; grid-template-columns: 48px minmax(0,1fr) 48px; align-items: center; gap: 8px; color: var(--ink-3); font-weight: 500; }
+.range-ends small:last-child { text-align: right; }
+.range-ends input { width: 100%; accent-color: var(--basil); }
+.editor-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.editor-warning { display: flex; gap: 9px; align-items: flex-start; border-radius: 14px; padding: 12px; background: var(--tomato-soft); color: var(--ink); font-size: 13px; line-height: 1.4; }
+.editor-warning svg { width: 21px; height: 21px; flex: none; color: var(--tomato); }
 .barcode-number { display: grid; gap: 6px; }
 .barcode-number label { font-size: 12.5px; color: var(--ink-2); font-weight: 600; }
 .barcode-number > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
