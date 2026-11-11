@@ -17,6 +17,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 - Plan a shopping trip around ingredients missing from recipes and open preferred-store offers
 - Ask an AI assistant questions about food, cooking, and recipes
 - Browse food reels for meal and recipe inspiration
+- Track recipes made from Reels and Pantry Pal on the Ingredients tab
   
 ## 2. ERD
 <img width="1427" height="779" alt="Screenshot 2026-10-07 at 11 55 41 AM" src="https://github.com/user-attachments/assets/039444b7-bdcb-46a0-8949-6543cb8199ea" />
@@ -71,6 +72,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
 Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed lists recipes you can make now, then ones missing one or two ingredients, then the rest, loading 8 at a time.
+
+The Ingredients tab shows how many recipes the account made this month, split between Reels and Pantry Pal, plus a dated history. Confirming “I used this recipe” in Reels updates the pantry and records a use together; viewing, saving, or liking a reel does not count. For a recipe suggested in free-form Pantry Pal chat, users explicitly log its name with “Log a recipe I made.” That log does not automatically deduct ingredients from the pantry. Each use is a separate owner-scoped record in `recipe_use_events`, so making the same recipe twice counts twice. Apply `supabase/migrations/20261110_recipe_use_tracking.sql` before deploying this frontend; see [SUPABASE_SYNC.md](SUPABASE_SYNC.md).
 
 Settings → Shopping → Shop ideas uses the signed-in account's preferred store, ZIP, pantry, and saved recipes. It shows ingredient ideas for recipes, checks whether a matching pantry item is already listed, and flags items whose listed dates need review. It does not calculate exact purchase quantities or determine food safety. The store button opens that retailer's official offers page; the user chooses a local store and checks current prices and availability there. MyPantry does not currently ingest live retailer prices, promotions, or stock, and no new database migration is needed for these suggestions.
 

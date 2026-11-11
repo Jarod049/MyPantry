@@ -12,6 +12,10 @@ the account data currently used by the app.
 - Confirmed food waste in `food_waste_events`: the ingredient, amount, unit,
   reason, and time reported by the user. Waste history stays available after
   the ingredient is removed or the inventory is reset.
+- Confirmed recipe uses in `recipe_use_events`: source (`reels` or `ai`), recipe
+  name, optional Reels recipe ID, and time used. Ingredients shows this month's
+  total by source and a dated history; each use is counted separately, including
+  repeated uses of the same recipe. Inventory reset preserves this history.
 - Saved, liked, and watched recipe IDs, learned recipe preferences, food
   allergy ingredient filters, unit preference,
   preferred store, and an optional ZIP code saved as a shopping preference.
@@ -63,25 +67,39 @@ migration.
    deploying profile photos. It creates a private `avatars` Storage bucket with
    a 5 MB image limit and policies that allow authenticated users to read,
    upload, replace, and delete files only inside their own UUID folder.
-8. Deploy the revised `receipt-scan`, `barcode-lookup`, and `pantry-chat` Edge Functions to the
-   target Supabase project after the migration and before deploying the
-   frontend. This is a separate Supabase deployment; the GitHub Pages workflow
-   does not deploy Edge Functions.
-9. Deploy the matching frontend through the existing Pages workflow. It uses
+8. Review and apply `supabase/migrations/20261110_recipe_use_tracking.sql`
+   before deploying recipe-use tracking. It creates owner-scoped
+   `recipe_use_events` records. Pantry Pal logs use owner-only inserts; the
+   `record_recipe_use` function updates pantry quantities and logs a catalog
+   recipe in one database transaction. Authenticated users can read and remove
+   only their own records.
+9. Deploy the revised `receipt-scan`, `barcode-lookup`, and `pantry-chat` Edge
+   Functions to the target Supabase project after the migration and before
+   deploying the frontend. This is a separate Supabase deployment; the GitHub
+   Pages workflow does not deploy Edge Functions.
+10. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-10. In a preview build, sign in and check that pantry edits, deletion, recipe
-   consumption, food waste, recipe activity, settings, and chat messages remain
-   after a reload. Upload and remove a profile photo, then verify it survives a
-   new session. Confirm that a branded item keeps its brand and product name,
-   and that multiple boxes remain represented after a reload. Check two
-   accounts to confirm they cannot see each other's records or photos.
+11. In a preview build, sign in and check that pantry edits, deletion, recipe
+   consumption, food waste, confirmed recipe uses, recipe activity, settings,
+   and chat messages remain after a reload. Upload and remove a profile photo,
+   then verify it survives a new session. Confirm that a branded item keeps its
+   brand and product name, and that multiple boxes remain represented after a
+   reload. Check two accounts to confirm they cannot see each other's records
+   or photos.
 
 Food waste is recorded only when a user explicitly logs it. An expired date or
 an ordinary ingredient deletion does not count as waste. Waste reports retain
 the ingredient's unit; totals with incompatible units such as pounds, gallons,
 and counts must not be summed into one amount. Reset inventory removes pantry
 rows but preserves food waste history.
+
+Recipe-use history counts confirmed uses, not recipe views, saves, likes, or AI
+suggestions alone. Reels confirmation updates pantry and records the use in one
+transaction; Undo reverses the pantry change and removes that use. Pantry Pal answers are free-form
+text, so users enter the recipe name when logging a meal suggested by the AI.
+This manual log does not automatically reduce pantry quantities. Recipe-use
+tracking does not require an Edge Function change.
 
 Package counts use the pantry item's quantity and measurement (for example,
 quantity `2` and measurement `box` appears as “2 boxes”). Branded products and batches with different expiration dates may
