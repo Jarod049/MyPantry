@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good' } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good', likeCounts } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -97,6 +97,11 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
           }
         };
       }
+    },
+    async rpc(name, args) {
+      queries.push({ rpc: name, args });
+      if (name === 'recipe_like_counts') return likeCounts ? { data: likeCounts, error: null } : { data: null, error: new Error('missing function') };
+      return { data: null, error: new Error(`Unknown rpc ${name}`) };
     },
     from(table) {
       let action = null, rowsToWrite = null, single = false, limitCount = null;
@@ -929,4 +934,73 @@ test('published recipes from Supabase are added to Reels', async t => {
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
   assert.ok(f.queries.some(q => q.table === 'recipe' && q.column === 'is_published'));
   assert.ok(f.w.document.querySelector('.reel[data-id="supa-toast"]'));
+});
+
+const soonDate = days => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+test('Going bad soon keeps the search bar and food categories and filters by them', async t => {
+  const database = [
+    { ...pantryRow(1, 'Milk', 1, 'gal', 'soon-user'), expiration_date: soonDate(2), food_type: 'Dairy' },
+    { ...pantryRow(2, 'Spinach', 1, 'ct', 'soon-user'), expiration_date: soonDate(3), food_type: 'Vegetables' },
+    { ...pantryRow(3, 'Rice', 1, 'lb', 'soon-user'), food_type: 'Grains' }
+  ];
+  const f = boot({ id: 'soon-user', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="ing"]'); await tick();
+  f.click('[data-act="ingView"][data-arg="soon"]'); await tick();
+  const doc = f.w.document;
+  assert.ok(doc.querySelector('#ingSearch'), 'search bar is shown');
+  assert.ok(doc.querySelector('.cat-chips [data-act="ingCat"][data-arg="All"]'), 'category chips are shown');
+  const names = () => [...doc.querySelectorAll('#ingList .item .name')].map(n => n.textContent);
+  assert.deepEqual(names(), ['Milk', 'Spinach'], 'only food going bad is listed');
+  const search = doc.querySelector('#ingSearch');
+  search.value = 'spin'; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  assert.deepEqual(names(), ['Spinach']);
+  search.value = ''; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  const dairy = doc.querySelector('.cat-chips [data-arg="Dairy"]');
+  if (dairy) { dairy.click(); await tick(); assert.deepEqual(names(), ['Milk']); }
+  f.click('.cat-chips [data-arg="All"]'); await tick();
+  const search2 = doc.querySelector('#ingSearch');
+  search2.value = 'rice'; search2.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  assert.match(doc.querySelector('#ingList').textContent, /No food matches "rice"/);
+});
+test('Reels like counts come from real account likes, not seeded numbers', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'liker'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'liker'), pantryRow(3, 'Butter', 1, 'lb', 'liker')];
+  const f = boot({ id: 'liker', database, likeCounts: [{ recipe_id: 'scrambled', likes: 2 }] }); t.after(() => f.dom.window.close()); await tick();
+  assert.ok(f.queries.some(q => q.rpc === 'recipe_like_counts'));
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  const btn = () => f.w.document.querySelector('.reel[data-id="scrambled"] [data-act="like"]');
+  assert.equal(btn().querySelector('.num').textContent, '2');
+  btn().click(); await tick();
+  assert.equal(btn().querySelector('.num').textContent, '3', 'your like is added');
+  btn().click(); await tick();
+  assert.equal(btn().querySelector('.num').textContent, '2');
+  assert.ok(f.w.MYPANTRY_RECIPES.every(r => !r.likes), 'built-in catalog has no fake like numbers');
+});
+test('Reels show zero likes when nobody has liked a recipe or counts are unavailable', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'nolikes'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'nolikes'), pantryRow(3, 'Butter', 1, 'lb', 'nolikes')];
+  const f = boot({ id: 'nolikes', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  assert.equal(f.w.document.querySelector('.reel[data-id="scrambled"] [data-act="like"] .num').textContent, '0');
+});
+test('store preference no longer asks for a ZIP code', async t => {
+  const f = boot({ id: 'nozip', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="settings"]'); await tick();
+  assert.doesNotMatch(f.text(), /ZIP/);
+  f.click('[data-act="storeSheet"]'); await tick();
+  assert.equal(f.w.document.querySelector('#zipIn'), null);
+  f.w.document.querySelector('input[name="storePick"][value="Walmart"]').checked = true;
+  f.click('[data-act="storeSave"]'); await tick(); await new Promise(r => setTimeout(r, 250));
+  const state = f.mockTables.user_app_state?.find(row => row.user_id === 'nozip');
+  assert.equal(state?.preferred_store, 'Walmart');
+  assert.equal(state?.zip_code, null);
+});
+test('sign-up keeps Create account in a sticky bar and Enter moves between fields', async t => {
+  const f = boot(); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="auth"][data-arg="signup"]'); await tick();
+  const doc = f.w.document;
+  assert.ok(doc.querySelector('.auth-submit-bar #suBtn'), 'button is inside the sticky submit bar');
+  const enter = el => el.dispatchEvent(new f.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  doc.querySelector('#su_name').focus(); enter(doc.querySelector('#su_name'));
+  assert.equal(doc.activeElement.id, 'su_email');
+  doc.querySelector('#su_pw2').focus(); enter(doc.querySelector('#su_pw2'));
+  assert.notEqual(doc.activeElement.id, 'su_pw2', 'invalid form closes the keyboard instead of submitting');
 });
