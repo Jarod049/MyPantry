@@ -306,6 +306,7 @@ function freshState() {
     store: "Smith's", zip: '',
     prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
+    recipeUseEvents: [], recipeUseStatus: 'loading',
     ingView: 'all', ingCat: 'All', ingQuery: '',
 scan: null, setPage: null, reelView: 'feed', shopRecipeId: null, shopReturnTab: null,
 profileDraft: null, profileCamera: null, profileError: null, profileLoading: false, profileSaving: false,
@@ -332,6 +333,8 @@ const OWNER_COLUMN = 'auth_user_id';
 let accountGeneration = 0;
 let pantryRequest = 0;
 let wasteRequest = 0;
+let recipeUseRequest = 0;
+let recipeUseInFlight = false;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
 let chatLoadRequest = 0;
@@ -406,6 +409,109 @@ async function loadWasteEvents() {
   }
   if (S.tab === 'ing') render();
   if ($('#wasteHistorySheet')) openSheet(wasteHistorySheet());
+}
+async function loadRecipeUseEvents() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++recipeUseRequest;
+  if (S.recipeUseStatus !== 'synced') S.recipeUseStatus = 'loading';
+  const events = [];
+  try {
+    for (let start = 0; ; start += 500) {
+      const { data, error } = await sb.from('recipe_use_events')
+        .select('event_id,user_id,source,recipe_id,recipe_name,used_at')
+        .eq('user_id', owner).order('used_at', { ascending: false }).range(start, start + 499);
+      if (generation !== accountGeneration || request !== recipeUseRequest) return;
+      if (error) throw error;
+      events.push(...data);
+      if (data.length < 500) break;
+    }
+    S.recipeUseEvents = events;
+    S.recipeUseStatus = 'synced';
+  } catch (error) {
+    if (generation !== accountGeneration || request !== recipeUseRequest) return;
+    S.recipeUseStatus = 'error';
+    console.error('[MyPantry] recipe use history load failed', error);
+  }
+  if (S.tab === 'ing') render();
+  if ($('#recipeUseHistorySheet')) openSheet(recipeUseHistorySheet());
+}
+async function saveRecipeUseEvent(source, recipeName, recipeId = null, eventId = newUuid()) {
+  const owner = S.user?.id, generation = accountGeneration;
+  if (!sb || !owner) throw new Error('Sign in before logging a recipe.');
+  const payload = { event_id: eventId, user_id: owner, source, recipe_id: recipeId, recipe_name: recipeName };
+  let data, error;
+  try {
+    ({ data, error } = await sb.from('recipe_use_events').insert(payload)
+      .select('event_id,user_id,source,recipe_id,recipe_name,used_at').maybeSingle());
+  } catch (cause) { error = cause; }
+  if (error || !data) {
+    // A lost response can follow a successful insert. Check the known event ID
+    // before deciding the recipe was not logged.
+    let result;
+    try {
+      result = await sb.from('recipe_use_events')
+        .select('event_id,user_id,source,recipe_id,recipe_name,used_at')
+        .eq('event_id', eventId).eq('user_id', owner).maybeSingle();
+    } catch (_) {}
+    if (!result?.data) throw error || result?.error || new Error('The recipe log was not confirmed.');
+    data = result.data;
+  }
+  if (generation !== accountGeneration || S.user?.id !== owner || data.user_id !== owner) throw new Error('Your account changed before the recipe was saved.');
+  ++recipeUseRequest;
+  if (!S.recipeUseEvents.some(event => event.event_id === data.event_id)) S.recipeUseEvents.unshift(data);
+  S.recipeUseStatus = 'synced';
+  void loadRecipeUseEvents();
+  return data;
+}
+async function recordCatalogRecipeUse(source, recipe, consumption) {
+  const owner = S.user?.id, generation = accountGeneration;
+  if (!sb || !owner || !consumption.length || consumption.some(item => !item.ingredient_id)) {
+    throw new Error('Your pantry is not ready to log this recipe. Reload and try again.');
+  }
+  const eventId = newUuid();
+  let data, error;
+  try {
+    ({ data, error } = await sb.rpc('record_recipe_use', {
+      p_event_id: eventId, p_source: source, p_recipe_id: recipe.id,
+      p_recipe_name: recipe.name, p_consumption: consumption
+    }));
+  } catch (cause) { error = cause; }
+  data = data?.event;
+  if (error || !data?.event_id) {
+    // The function may have committed even when its response was lost.
+    let result;
+    try {
+      result = await sb.from('recipe_use_events')
+        .select('event_id,user_id,source,recipe_id,recipe_name,used_at')
+        .eq('event_id', eventId).eq('user_id', owner).maybeSingle();
+    } catch (_) {}
+    if (!result?.data) throw error || result?.error || new Error('The recipe update was not confirmed.');
+    data = result.data;
+  }
+  if (generation !== accountGeneration || S.user?.id !== owner || data.user_id !== owner) {
+    throw new Error('Your account changed before the recipe was saved.');
+  }
+  ++pantryRequest;
+  sync = 'synced';
+  ++recipeUseRequest;
+  if (!S.recipeUseEvents.some(event => event.event_id === data.event_id)) S.recipeUseEvents.unshift(data);
+  S.recipeUseStatus = 'synced';
+  void loadRecipeUseEvents();
+  return data;
+}
+async function removeRecipeUseEvent(eventId) {
+  const owner = S.user?.id, generation = accountGeneration;
+  if (!sb || !owner) throw new Error('Sign in before changing recipe history.');
+  const { data, error } = await sb.from('recipe_use_events').delete()
+    .eq('event_id', eventId).eq('user_id', owner).select('event_id');
+  if (error) throw error;
+  if (generation !== accountGeneration || S.user?.id !== owner) return false;
+  if (!data?.length) throw new Error('That recipe entry was not found.');
+  ++recipeUseRequest;
+  S.recipeUseEvents = S.recipeUseEvents.filter(event => event.event_id !== eventId);
+  S.recipeUseStatus = 'synced';
+  void loadRecipeUseEvents();
+  return true;
 }
 const stateKey = () => S.user?.id ? `mp_state_v2:${S.user.id}` : null;
 function persist() {
@@ -882,6 +988,14 @@ function previewUse(r) {
   S.inv = saved; S.undo = null;
   return log;
 }
+function recipeConsumption(before, after) {
+  const nextById = new Map(after.map(item => [item.id, item]));
+  return before.filter(item => (nextById.get(item.id)?.qty ?? 0) < item.qty).map(item => ({
+    ingredient_id: item.dbId,
+    from_quantity: item.qty,
+    to_quantity: nextById.get(item.id)?.qty ?? 0
+  }));
+}
 const logLine = l => `${esc(l.name)}: ${qtyText(l.from, l.unit)} → ${l.to <= 0.001 ? 'used up' : qtyText(l.to, l.unit)}`;
 
 function addItems(items) {
@@ -1061,7 +1175,7 @@ function openSheet(html, opts = {}) {
   s.className = 'scrim' + (opts.center ? ' center-modal' : '');
   s.id = 'scrim';
   s.innerHTML = opts.center ? `<div class="modal" role="dialog" aria-modal="true">${html}</div>` : `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
-  s.addEventListener('click', e => { if (e.target === s) closeSheet(); });
+  s.addEventListener('click', e => { if (e.target === s && !recipeUseInFlight) closeSheet(); });
   phone.appendChild(s);
   const f = s.querySelector('[autofocus]'); if (f) setTimeout(() => f.focus(), 60);
   return s;
@@ -1242,7 +1356,7 @@ function renderHome() {
   return `<div class="chat-head"><div class="bot-av">${ic('spark')}</div><div><h1>Pantry Pal</h1><div class="sub">AI assistant · history saved to your account</div></div>
       <button class="icon-btn" data-act="newChat" aria-label="Start a new chat">${ic('refresh')}</button></div>
     <div class="scroll" id="chatScroll"><div class="chat" id="chat" aria-live="polite">${S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join('')}</div></div>
-    <div class="chips" aria-label="Suggestions"><button class="chip" data-act="deals">🛒 Shop ideas</button>${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+    <div class="chips" aria-label="Suggestions"><button class="chip" data-act="deals">🛒 Shop ideas</button><button class="chip" data-act="aiRecipeUseStart">🍳 Log a recipe I made</button>${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
     <form class="composer" id="chatForm"><input class="input" id="chatIn" maxlength="2000" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
 }
 function pushMsg(who, html) {
@@ -1307,7 +1421,7 @@ function rcard(r, opts = {}) {
   else if (u <= 3) warn = `<div class="warnline">Uses food that spoils in ${plural(u, 'day')}</div>`;
   return `<div class="rcard"><div class="thumb" style="background:${r.bg}">${r.emoji}</div>
     <div><b>${esc(r.name)}</b><div class="meta">${r.time} min · Easy · ${r.type}${opts.sub ? '' : ` · you have all ${r.ing.length}`}</div>${warn}</div>
-    <div class="btns"><button class="btn btn-ghost" data-act="recipe" data-arg="${r.id}">View recipe</button>${opts.sub ? '' : `<button class="btn btn-soft" data-act="useAsk" data-arg="${r.id}">I made this</button>`}</div></div>`;
+    <div class="btns"><button class="btn btn-ghost" data-act="recipe" data-arg="${r.id}" data-source="ai">View recipe</button>${opts.sub ? '' : `<button class="btn btn-soft" data-act="useAsk" data-arg="${r.id}" data-source="ai">I made this</button>`}</div></div>`;
 }
 
 const STOP = new Set('do i have any some the a an is my still good left how much many there got we bad gone expired safe to eat of are it any? in pantry fridge at home still? okay ok'.split(' '));
@@ -1497,6 +1611,63 @@ function wasteHistorySheet() {
     <div class="sheet-body" id="wasteHistorySheet"><p>Amounts are grouped by weight, volume, and item type.</p>${intro}
       ${S.wasteStatus === 'synced' ? rows ? `<div class="waste-list">${rows}</div>` : '<div class="waste-empty">No food waste has been logged yet. Open an ingredient to log what you threw away.</div>' : ''}</div>`;
 }
+function recipeUsesThisMonth() {
+  const now = new Date();
+  return S.recipeUseEvents.filter(event => {
+    const used = new Date(event.used_at);
+    return used.getFullYear() === now.getFullYear() && used.getMonth() === now.getMonth();
+  });
+}
+function recipeUseCard() {
+  const events = recipeUsesThisMonth();
+  const reels = events.filter(event => event.source === 'reels').length;
+  const ai = events.length - reels;
+  const count = S.recipeUseStatus === 'loading' ? 'Loading recipe history…'
+    : S.recipeUseStatus === 'error' ? 'Couldn’t load recipe history'
+      : `${plural(events.length, 'recipe')} made this month`;
+  const detail = S.recipeUseStatus === 'synced'
+    ? `${reels} from Reels · ${ai} from Pantry Pal` : 'Track meals you actually made';
+  return `<button class="waste-card recipe-use-card" data-act="recipeUseHistory" aria-label="Recipes made, ${esc(count)}. View history">
+    <span class="waste-card-head"><span class="waste-card-title">Recipes made</span><span class="waste-card-link">View history ›</span></span>
+    <span class="waste-card-count">${esc(count)}</span><span class="waste-card-amount">${esc(detail)}</span>
+  </button>`;
+}
+function recipeUseHistorySheet() {
+  const events = recipeUsesThisMonth();
+  const reels = events.filter(event => event.source === 'reels').length;
+  const ai = events.length - reels;
+  const allReels = S.recipeUseEvents.filter(event => event.source === 'reels').length;
+  const allAi = S.recipeUseEvents.length - allReels;
+  const intro = S.recipeUseStatus === 'loading' ? '<div class="waste-empty">Loading recipe history…</div>'
+    : S.recipeUseStatus === 'error' ? '<div class="waste-empty">Recipe history could not be loaded. Try again.</div><button class="btn btn-soft" data-act="recipeUseRetry">Try again</button>'
+      : `<div class="waste-empty">${plural(events.length, 'recipe')} this month: ${reels} Reels · ${ai} Pantry Pal<br>${S.recipeUseEvents.length} total: ${allReels} Reels · ${allAi} Pantry Pal</div>`;
+  const rows = S.recipeUseEvents.map(event => `<div class="waste-row recipe-use-row">
+    <div class="waste-row-main"><span class="waste-row-name">${esc(event.recipe_name)}</span>
+      <span class="waste-row-meta">${event.source === 'reels' ? 'Reels' : 'Pantry Pal'} · ${esc(new Date(event.used_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))}</span></div>
+    <button class="recipe-use-remove" data-act="recipeUseRemoveAsk" data-arg="${esc(event.event_id)}" aria-label="Remove ${esc(event.recipe_name)} from recipe history">Remove</button>
+  </div>`).join('');
+  return `<div class="sheet-head"><h2>Recipes made</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body" id="recipeUseHistorySheet"><p>Only recipes you confirm as made count here. Viewing, liking, or saving a recipe does not count.</p>
+      ${intro}<button class="btn btn-soft" data-act="aiRecipeUseStart">Log a Pantry Pal recipe</button>
+      ${S.recipeUseStatus === 'synced' ? rows ? `<div class="waste-list">${rows}</div>` : '<div class="waste-empty">No recipes logged yet. Make a Reel recipe or log one from Pantry Pal.</div>' : ''}</div>`;
+}
+function aiRecipeUseSheet() {
+  return `<div class="sheet-head"><h2>Log a Pantry Pal recipe</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <form class="sheet-body" id="aiRecipeUseForm" novalidate>
+      <p>Did you make a recipe Pantry Pal suggested? Enter its name to add one use to your tracker.</p>
+      <div class="field"><label for="aiRecipeName">Recipe name</label><input class="input" id="aiRecipeName" maxlength="120" placeholder="e.g. Egg fried rice" autocomplete="off" autofocus>
+        <span class="field-err" id="aiRecipeNameErr" hidden>Enter a recipe name.</span>
+        <span class="field-err" id="aiRecipeSaveErr" hidden>Couldn’t save this recipe. Please try again.</span></div>
+      <p class="hint">Pantry Pal ideas are free-form, so this log does not remove ingredients automatically. Update their amounts in Ingredients if needed.</p>
+    </form><div class="sheet-foot"><button class="btn btn-primary" data-act="aiRecipeUseSave" id="aiRecipeUseSaveBtn">Log recipe made</button>
+      <button class="btn btn-ghost" data-act="closeSheet">Cancel</button></div>`;
+}
+function recipeUseRemoveSheet(event) {
+  return `<div class="sheet-head"><h2>Remove recipe entry?</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body"><p>Remove <b>${esc(event.recipe_name)}</b> from your recipe count? This will not change your Ingredients.</p></div>
+    <div class="sheet-foot"><button class="btn btn-danger" data-act="recipeUseRemoveConfirm" data-arg="${esc(event.event_id)}" id="recipeUseRemoveBtn">Remove entry</button>
+      <button class="btn btn-ghost" data-act="recipeUseHistory">Cancel</button></div>`;
+}
 function wasteForm(it) {
   const [quantity, unit] = wasteDisplay(it.qty, it.unit);
   return `<div class="sheet-head"><h2>Log food waste</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
@@ -1534,7 +1705,7 @@ function renderIng() {
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
     ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Going bad soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
-    <div class="scroll">${wasteCard()}${content}<div style="height:90px"></div></div>
+    <div class="scroll">${wasteCard()}${recipeUseCard()}${content}<div style="height:90px"></div></div>
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
 function syncChip() {
@@ -2605,13 +2776,13 @@ function renderSaved() {
         const blocked = matchingRecipeAllergies(r);
         const ok = pantryReady && !miss.length && !blocked.length;
         return `<div class="saved-card">
-          <button class="saved-main" data-act="recipe" data-arg="${r.id}" aria-label="Open ${esc(r.name)}">
+          <button class="saved-main" data-act="recipe" data-arg="${r.id}" data-source="reels" aria-label="Open ${esc(r.name)}">
             <span class="saved-thumb" style="background:${r.bg}">${r.emoji}</span>
             <span class="saved-txt"><b>${esc(r.name)}</b><span>${r.time} min · Easy · ${r.type}</span>
               <span class="saved-status ${ok ? 'can' : 'cant'}">${blocked.length ? `Matches your allergy list: ${esc(blocked.map(allergyLabel).join(', '))}` : !pantryReady ? 'Pantry unavailable; check again soon' : ok ? `${ic('check')} Ingredients appear to be on hand` : `Check ${esc(miss.map(({ ingredient }) => needName(ingredient)).join(', '))}`}</span></span>
           </button>
           <div class="saved-actions">
-            ${pantryReady && !blocked.length ? ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Shop ingredients</button>` : ''}
+            ${pantryReady && !blocked.length ? ok ? `<button class="sa-primary" data-act="useAsk" data-arg="${r.id}" data-source="reels">I used this recipe</button>` : `<button class="sa-ghost" data-act="askMissing" data-arg="${r.id}">Shop ingredients</button>` : ''}
             <button class="sa-ghost" data-act="unsave" data-arg="${r.id}" aria-label="Remove ${esc(r.name)} from saved">${ic('trash')} Remove</button>
           </div></div>`;
       }).join('')}</div>`;
@@ -2634,7 +2805,7 @@ function reelHtml(r) {
       <button class="${liked ? 'on' : ''}" data-act="like" data-arg="${esc(r.id)}" aria-pressed="${liked}"><span class="ri">${ic('heart', liked)}</span><span class="num">${fmtK(r.likes + (liked ? 1 : 0))}</span></button>
       <button class="${saved ? 'saved' : ''}" data-act="save" data-arg="${esc(r.id)}" aria-pressed="${saved}"><span class="ri">${ic('bookmark', saved)}</span>${saved ? 'Saved' : 'Save'}</button>
       <button data-act="share" data-arg="${esc(r.id)}"><span class="ri">${ic('share')}</span>Share</button>
-      <button data-act="recipe" data-arg="${esc(r.id)}"><span class="ri">${ic('list')}</span>Recipe</button>
+      <button data-act="recipe" data-arg="${esc(r.id)}" data-source="reels"><span class="ri">${ic('list')}</span>Recipe</button>
     </div>
     <div class="reel-info">
       <h2>${esc(r.name)}</h2>
@@ -2642,7 +2813,7 @@ function reelHtml(r) {
       ${ok ? `<div class="have">${ic('check')} You have all ${r.ing.length} ingredients</div>`
         : `<div class="need-row"><span class="need-ic">${ic('store')}</span><span><b>Need ${esc(needs)}</b><small>You have ${r.ing.length - miss.length} of ${r.ing.length} ingredients</small></span></div>`}
       ${spoiled ? `<div class="reel-warn red">Check your ${esc(spoiled.name.toLowerCase())}. It passed its date ${fmtDate(spoiled.exp)}.</div>` : soon ? `<div class="reel-warn">Uses your ${esc(soon.name.toLowerCase())} before it spoils (${plural(daysLeft(soon), 'day')})</div>` : ''}
-      ${ok ? `<div class="used-row"><button class="u1" data-act="useAsk" data-arg="${esc(r.id)}">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${esc(r.id)}">Not yet</button></div>`
+      ${ok ? `<div class="used-row"><button class="u1" data-act="useAsk" data-arg="${esc(r.id)}" data-source="reels">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${esc(r.id)}">Not yet</button></div>`
         : `<div class="used-row"><button class="u1" data-act="askNeed" data-arg="${esc(r.id)}">Ask for a swap</button><button class="u2" data-act="nextReel" data-arg="${esc(r.id)}">Next</button></div>`}
     </div>
     <div class="reel-progress"><i></i></div>
@@ -2691,7 +2862,7 @@ function mountReels() {
 }
 function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.io.disconnect(); $('#reelFeed')?.removeEventListener('scroll', reelCtl.more); reelCtl = null; } }
 
-function recipeSheet(r) {
+function recipeSheet(r, source = 'reels') {
   const pantryReady = sync === 'synced';
   const blocked = matchingRecipeAllergies(r);
   const shopNeeded = !blocked.length && pantryReady && shopNeeds(r).length > 0;
@@ -2714,16 +2885,16 @@ function recipeSheet(r) {
     ${suggestedSubstitution && !canUse ? `<div class="sub-card">${esc(suggestedSubstitution.text)}</div>` : ''}
     <div><div class="lbl" style="margin-bottom:6px">Steps</div><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>
   </div>
-  <div class="sheet-foot">${canUse ? `<button class="btn btn-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : ''}
+  <div class="sheet-foot">${canUse ? `<button class="btn btn-primary" data-act="useAsk" data-arg="${r.id}" data-source="${source}">I used this recipe</button>` : ''}
     ${shopNeeded ? `<button class="btn btn-soft" data-act="shopForRecipe" data-arg="${esc(r.id)}">Shop ingredients</button>` : ''}
     <button class="btn btn-ghost" data-act="save" data-arg="${r.id}">${S.saved.has(r.id) ? 'Saved to your library' : 'Save recipe'}</button></div>`;
 }
-function useSheet(r) {
+function useSheet(r, source = 'reels') {
   const log = previewUse(r);
   return `<div class="sheet-head"><h2>Did you make ${esc(r.name)}?</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body"><p style="margin:0;color:var(--ink-2)">We'll take these out of your Ingredients so you don't have to:</p>
     <ul class="ing-list">${log.map(l => `<li><span class="em">${l.emoji || '📦'}</span><span>${esc(l.name)}<span class="amt num">${qtyText(l.from, l.unit)} → ${l.to <= .001 ? 'used up' : qtyText(l.to, l.unit)}</span></span><span></span></li>`).join('')}</ul></div>
-  <div class="sheet-foot"><button class="btn btn-primary" data-act="useConfirm" data-arg="${r.id}">Yes, update my pantry</button><button class="btn btn-ghost" data-act="useNot">Not yet</button></div>`;
+  <div class="sheet-foot"><button class="btn btn-primary" data-act="useConfirm" data-arg="${r.id}" data-source="${source}">Yes, update my pantry and log recipe</button><button class="btn btn-ghost" data-act="useNot">Not yet</button></div>`;
 }
 function shareSheet(r) {
   const people = [['Family chat', '#fcf1d3', '#c98a07', 'F'], ['Dave', '#e3eefa', '#2f6fb5', 'D'], ['Mom', '#fbe6e1', '#d4452f', 'M'], ['Sarah', '#e1efe7', '#1d6a4c', 'S']];
@@ -3105,6 +3276,57 @@ const ACT = {
   edit(id) { const it = S.inv.find(i => i.id === id); if (it) openItemForm(it, 'edit'); },
   wasteHistory() { openSheet(wasteHistorySheet()); },
   wasteRetry() { void loadWasteEvents(); },
+  recipeUseHistory() { openSheet(recipeUseHistorySheet()); },
+  recipeUseRetry() { void loadRecipeUseEvents(); },
+  aiRecipeUseStart() {
+    openSheet(aiRecipeUseSheet());
+    $('#aiRecipeUseForm').addEventListener('submit', event => { event.preventDefault(); void ACT.aiRecipeUseSave(); });
+  },
+  async aiRecipeUseSave() {
+    const form = $('#aiRecipeUseForm'), input = $('#aiRecipeName'), button = $('#aiRecipeUseSaveBtn');
+    if (!form || !input || !button || button.disabled) return;
+    const name = input.value.trim().replace(/\s+/g, ' ');
+    const valid = name.length > 0 && name.length <= 120;
+    $('#aiRecipeNameErr').hidden = valid;
+    input.classList.toggle('bad', !valid);
+    if (!valid) return;
+    const owner = S.user?.id, generation = accountGeneration;
+    button.disabled = true; button.textContent = 'Saving…';
+    $('#aiRecipeSaveErr').hidden = true;
+    if (!form.dataset.eventId) form.dataset.eventId = newUuid();
+    try {
+      const event = await saveRecipeUseEvent('ai', name, null, form.dataset.eventId);
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      if (button.isConnected) closeSheet();
+      render(); toast(`Logged ${esc(event.recipe_name)} as made`, null, 'check');
+    } catch (error) {
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      console.error('[MyPantry] AI recipe use save failed', error);
+      const message = $('#aiRecipeSaveErr'); if (button.isConnected && message) message.hidden = false;
+      void loadRecipeUseEvents();
+    } finally {
+      if (button.isConnected) { button.disabled = false; button.textContent = 'Log recipe made'; }
+    }
+  },
+  recipeUseRemoveAsk(id) {
+    const event = S.recipeUseEvents.find(item => item.event_id === id);
+    if (event) openSheet(recipeUseRemoveSheet(event));
+  },
+  async recipeUseRemoveConfirm(id) {
+    const button = $('#recipeUseRemoveBtn');
+    if (!button || button.disabled) return;
+    button.disabled = true; button.textContent = 'Removing…';
+    try {
+      if (!await removeRecipeUseEvent(id)) return;
+      if (button.isConnected) openSheet(recipeUseHistorySheet());
+      render(); toast('Recipe entry removed', null, 'check');
+    } catch (error) {
+      console.error('[MyPantry] recipe use removal failed', error);
+      toast('Couldn’t remove this recipe entry. Please try again.', null, 'alert');
+    } finally {
+      if (button.isConnected) { button.disabled = false; button.textContent = 'Remove entry'; }
+    }
+  },
   wasteStart(id) { const it = S.inv.find(i => i.id === id); if (it) openWasteForm(it); },
   async wasteSave() {
     const form = $('#wasteForm'), button = $('#wasteSaveBtn');
@@ -3189,7 +3411,7 @@ const ACT = {
     closeSheet(); render();
     toast(`Deleted ${esc(it.name)}`, () => { void restorePantrySnapshot(JSON.stringify(before)); }, 'trash');
   },
-  closeSheet() { closeSheet(); },
+  closeSheet() { if (!recipeUseInFlight || !$('#scrim')?.querySelector('[data-act="useConfirm"]')) closeSheet(); },
 
   startScan(mode) { closeSheet(); if (S.tab !== 'scan') S.tab = 'scan'; startScan(mode); },
   manual() { stopCameraPreview(); closeSheet(); if (S.scan && S.scan.stage !== 'review') S.scan = null; S.tab = 'scan'; render(); openItemForm({ store: 'Fridge', cat: 'Other' }, 'new'); },
@@ -3303,21 +3525,73 @@ const ACT = {
   },
   share(id) { openSheet(shareSheet(R(id))); },
   shareTo(who) { closeSheet(); toast(who === 'link' ? 'Link copied' : `Sent to ${esc(who)}`, null, 'share'); },
-  recipe(id) { openSheet(recipeSheet(R(id))); },
-  useAsk(id) { const r = R(id); if (!r || !recipeAllowed(r)) { closeSheet(); toast('This recipe matches your allergy list.', null, 'alert'); return; } if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; } openSheet(useSheet(r)); },
-  async useConfirm(id) {
+  recipe(id, button) {
+    const r = R(id);
+    if (r) openSheet(recipeSheet(r, button?.dataset.source === 'ai' ? 'ai' : 'reels'));
+  },
+  useAsk(id, button) {
+    if (recipeUseInFlight) { toast('Still saving your last recipe. Please wait.', null, 'alert'); return; }
     const r = R(id);
     if (!r || !recipeAllowed(r)) { closeSheet(); toast('This recipe matches your allergy list.', null, 'alert'); return; }
-    const before = snapshot(); useRecipe(r);
-    if (!await applyPantryTransition(JSON.parse(before), JSON.parse(snapshot()))) return;
-    closeSheet();
-    const snap = S.undo;
-    if (S.tab === 'reels') {
-      const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0; render(); const f2 = $('#reelFeed'); if (f2) f2.scrollTop = st;
-    } else render();
-    toast(`Pantry updated for ${esc(r.name)}`, () => { void restorePantrySnapshot(snap); });
+    if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; }
+    openSheet(useSheet(r, button?.dataset.source === 'ai' ? 'ai' : 'reels'));
   },
-  useNot() { closeSheet(); toast('No changes. Your pantry stays the same.', null, 'check'); },
+  async useConfirm(id, button) {
+    if (!button || button.disabled || recipeUseInFlight) return;
+    const r = R(id);
+    if (!r || !recipeAllowed(r)) { closeSheet(); toast('This recipe matches your allergy list.', null, 'alert'); return; }
+    if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; }
+    const owner = S.user?.id, generation = accountGeneration;
+    const source = button.dataset.source === 'ai' ? 'ai' : 'reels';
+    const before = snapshot();
+    recipeUseInFlight = true;
+    button.disabled = true; button.textContent = 'Saving…';
+    try {
+      useRecipe(r);
+      const after = snapshot();
+      const consumption = recipeConsumption(JSON.parse(before), JSON.parse(after));
+      let event;
+      try {
+        event = await recordCatalogRecipeUse(source, r, consumption);
+      } catch (error) {
+        if (generation !== accountGeneration || owner !== S.user?.id) return;
+        console.error('[MyPantry] recipe use save failed', error);
+        S.inv = JSON.parse(before); S.undo = null;
+        await loadPantry(); void loadRecipeUseEvents();
+        toast('Couldn’t confirm the recipe. Check Ingredients and recipe history before trying again.', null, 'alert');
+        return;
+      }
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      if (button.isConnected) closeSheet();
+      if (S.tab === 'reels') {
+        const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0; render(); const f2 = $('#reelFeed'); if (f2) f2.scrollTop = st;
+      } else render();
+      toast(`Pantry updated and ${esc(r.name)} logged`, async () => {
+        if (generation !== accountGeneration || owner !== S.user?.id) return;
+        if (snapshot() !== after) {
+          toast('Your pantry changed after this recipe. Edit Ingredients and recipe history to correct it.', null, 'alert');
+          return;
+        }
+        if (!await restorePantrySnapshot(before)) return;
+        if (generation !== accountGeneration || owner !== S.user?.id) return;
+        try {
+          if (await removeRecipeUseEvent(event.event_id)) {
+            render(); toast('Pantry and recipe count restored', null, 'check');
+          }
+        } catch (error) {
+          console.error('[MyPantry] recipe use undo failed', error);
+          toast('Pantry restored, but the recipe remains in your count. Remove it from Ingredients.', null, 'alert');
+        }
+      });
+    } finally {
+      recipeUseInFlight = false;
+      if (button.isConnected) { button.disabled = false; button.textContent = 'Yes, update my pantry and log recipe'; }
+    }
+  },
+  useNot() {
+    if (recipeUseInFlight) return;
+    closeSheet(); toast('No changes. Your pantry stays the same.', null, 'check');
+  },
   nextReel(id, b) {
     const next = b.closest('.reel').nextElementSibling;
     if (next) $('#reelFeed').scrollTo({ top: next.offsetTop, behavior: 'smooth' });
@@ -3511,7 +3785,7 @@ function enterApp() {
   S.auth = 'app'; S.chat = []; render();
   if (S.user.avatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
   startAppSessionTracking();
-  loadPantry(); loadWasteEvents(); loadUserAppState(); loadChatHistory();
+  loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadUserAppState(); loadChatHistory();
 }
 
 /* ---------- Event wiring ---------- */

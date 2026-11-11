@@ -592,6 +592,10 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .waste-row-meta { display: block; color: var(--ink-3); font-size: 12px; }
 .waste-row-qty { color: var(--ink-2); font-size: 13px; font-weight: 650; white-space: nowrap; }
 .waste-empty { padding: 26px 16px; border-radius: var(--r-md); background: var(--surface-2); color: var(--ink-2); text-align: center; font-size: 14px; }
+.recipe-use-card .waste-card-amount { display: block; margin: 4px 0 0; }
+.recipe-use-remove { border: 0; padding: 8px; background: transparent; color: var(--basil); font-size: 12px; font-weight: 700; cursor: pointer; }
+.recipe-use-remove:hover { text-decoration: underline; }
+.recipe-use-remove:focus-visible { outline: 2.5px solid var(--sky); outline-offset: 2px; border-radius: 6px; }
 
 /* ---------- Sheets & modals ---------- */
 .scrim { position: absolute; inset: 0; background: rgba(8, 16, 12, .45); z-index: 50; display: flex; align-items: flex-end; animation: fade .18s; }
