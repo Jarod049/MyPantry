@@ -16,6 +16,12 @@
   --theme-accent: #f2b632;
   --sky: #2f6fb5;
   --sky-soft: #e3eefa;
+  --scan-pantry: #2c8658;
+  --scan-pantry-on: #ffffff;
+  --scan-receipt: #e2a20c;
+  --scan-receipt-on: #2b1b00;
+  --scan-barcode: #347fc4;
+  --scan-barcode-on: #ffffff;
   --fresh: #1d6a4c;
   --fresh-soft: #e1efe7;
   --brand-shadow: rgba(29, 106, 76, .35);
@@ -81,6 +87,12 @@
   --butter: #a16000;
   --butter-soft: #fff0c7;
   --theme-accent: #c47a12;
+  --scan-pantry: #b43a2f;
+  --scan-pantry-on: #ffffff;
+  --scan-receipt: #c98a18;
+  --scan-receipt-on: #2b1b16;
+  --scan-barcode: #8f4c3a;
+  --scan-barcode-on: #ffffff;
   --fresh: #347052;
   --fresh-soft: #e4f1e9;
   --brand-shadow: rgba(180, 58, 47, .35);
@@ -127,6 +139,9 @@
   --tomato: #9c2f22; --tomato-soft: #f9e3dd;
   --butter: #a16000; --butter-soft: #fff0c7;
   --theme-accent: #397557;
+  --scan-pantry: #c84b2c; --scan-pantry-on: #ffffff;
+  --scan-receipt: #397557; --scan-receipt-on: #ffffff;
+  --scan-barcode: #c58a12; --scan-barcode-on: #1f2922;
   --fresh: #397557; --fresh-soft: #e2f0e7;
   --brand-shadow: rgba(214, 83, 50, .32);
   --ground: #f3f7f1; --surface: #ffffff; --surface-2: #f7faf5; --surface-3: #e6efe8;
@@ -142,6 +157,9 @@
   --tomato: #8a1f1a; --tomato-soft: #fbe6e1;
   --butter: #a16000; --butter-soft: #fff0c7;
   --theme-accent: #d8753d;
+  --scan-pantry: #673653; --scan-pantry-on: #ffffff;
+  --scan-receipt: #d27a48; --scan-receipt-on: #281d24;
+  --scan-barcode: #47745f; --scan-barcode-on: #ffffff;
   --fresh: #347052; --fresh-soft: #e4f1e9;
   --brand-shadow: rgba(103, 54, 83, .35);
   --ground: #fff8f2; --surface: #ffffff; --surface-2: #fff8f2; --surface-3: #f4e8e1;
@@ -626,6 +644,25 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .opt b { display: block; font-size: 15.5px; line-height: 1.25; color: var(--ink); }
 .opt > span > span { font-size: 13px; color: var(--ink-2); }
 .opt .chev { width: 18px; height: 18px; color: var(--ink-3); }
+.opt.tinted {
+  background: var(--scan-accent);
+  border-color: var(--scan-accent);
+  color: var(--scan-on);
+}
+.opt.tinted:hover {
+  background: color-mix(in srgb, var(--scan-accent) 88%, var(--ink));
+  border-color: color-mix(in srgb, var(--scan-accent) 88%, var(--ink));
+}
+.opt.tinted .oi {
+  background: color-mix(in srgb, white 22%, var(--scan-accent));
+  color: var(--scan-on);
+}
+.opt.tinted b { color: var(--scan-on); }
+.opt.tinted > span > span { color: var(--scan-on); opacity: .86; }
+.opt.tinted .chev { color: var(--scan-on); }
+.opt.tinted.pantry { --scan-accent: var(--scan-pantry); --scan-on: var(--scan-pantry-on); }
+.opt.tinted.receipt { --scan-accent: var(--scan-receipt); --scan-on: var(--scan-receipt-on); }
+.opt.tinted.barcode { --scan-accent: var(--scan-barcode); --scan-on: var(--scan-barcode-on); }
 .opt.featured { background: var(--basil); border-color: var(--basil); color: var(--on-brand); }
 .opt.featured b { color: var(--on-brand); }
 .opt.featured > span > span { color: var(--on-brand); opacity: .9; }

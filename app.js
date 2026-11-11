@@ -785,15 +785,15 @@ function applySession(session, event) {
 
 /* ---------- Inventory logic ---------- */
 const ALLERGY_PRESETS = [
-  { id: 'milk', label: 'Milk', terms: ['milk', 'cream', 'cheese', 'butter', 'yogurt', 'dairy', 'parmesan', 'cheddar', 'mozzarella'] },
-  { id: 'eggs', label: 'Eggs', terms: ['egg', 'eggs', 'mayonnaise', 'mayo'] },
-  { id: 'fish', label: 'Fish', terms: ['fish', 'salmon', 'tuna', 'cod', 'tilapia', 'anchovy'] },
-  { id: 'shellfish', label: 'Shellfish', terms: ['shellfish', 'shrimp', 'prawn', 'crab', 'lobster', 'scallop', 'clam', 'mussel', 'oyster'] },
-  { id: 'tree nuts', label: 'Tree nuts', terms: ['tree nut', 'almond', 'cashew', 'walnut', 'pecan', 'pistachio', 'hazelnut', 'macadamia'] },
+  { id: 'milk', label: 'Milk', terms: ['milk', 'buttermilk', 'cream', 'half and half', 'cheese', 'butter', 'ghee', 'yogurt', 'yoghurt', 'dairy', 'whey', 'casein', 'caseinate', 'curd', 'custard', 'parmesan', 'cheddar', 'mozzarella', 'ricotta', 'ice cream'] },
+  { id: 'eggs', label: 'Eggs', terms: ['egg', 'eggs', 'mayonnaise', 'mayo', 'albumin', 'albumen', 'ovalbumin', 'meringue', 'caesar dressing'] },
+  { id: 'fish', label: 'Fish', terms: ['fish', 'salmon', 'tuna', 'cod', 'tilapia', 'anchovy', 'anchovies', 'haddock', 'halibut', 'trout', 'sardine', 'pollock', 'mahi', 'caesar dressing', 'worcestershire'] },
+  { id: 'shellfish', label: 'Shellfish', terms: ['shellfish', 'shrimp', 'prawn', 'crab', 'lobster', 'crayfish', 'crawfish', 'scallop', 'clam', 'mussel', 'oyster', 'squid', 'calamari', 'octopus'] },
+  { id: 'tree nuts', label: 'Tree nuts', terms: ['tree nut', 'almond', 'cashew', 'walnut', 'pecan', 'pistachio', 'hazelnut', 'macadamia', 'brazil nut', 'pine nut', 'chestnut', 'praline', 'marzipan', 'pesto'] },
   { id: 'peanuts', label: 'Peanuts', terms: ['peanut', 'peanuts'] },
-  { id: 'wheat', label: 'Wheat', terms: ['wheat', 'flour', 'bread', 'pasta', 'noodle', 'tortilla', 'cracker', 'cereal', 'oats'] },
-  { id: 'soy', label: 'Soy', terms: ['soy', 'soybean', 'tofu', 'edamame', 'tempeh'] },
-  { id: 'sesame', label: 'Sesame', terms: ['sesame', 'tahini'] }
+  { id: 'wheat', label: 'Wheat', terms: ['wheat', 'flour', 'bread', 'pasta', 'noodle', 'tortilla', 'cracker', 'cereal', 'semolina', 'durum', 'couscous', 'bulgur', 'farro', 'spelt', 'seitan'] },
+  { id: 'soy', label: 'Soy', terms: ['soy', 'soya', 'soybean', 'tofu', 'edamame', 'tempeh', 'miso', 'tamari', 'textured vegetable protein'] },
+  { id: 'sesame', label: 'Sesame', terms: ['sesame', 'tahini', 'benne', 'hummus'] }
 ];
 const normalizeAllergy = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 function allergyList(source = S.prefs?.allergies) {
@@ -809,17 +809,26 @@ function includesWordPhrase(words, phrase) {
   const wanted = shopWords(phrase);
   return !!wanted.length && words.some((_, at) => wanted.every((word, offset) => words[at + offset] === word));
 }
-function matchingRecipeAllergies(recipe) {
-  const selected = allergyList();
+function matchingAllergiesInText(text, source = allergyList()) {
+  const selected = allergyList(source);
   if (!selected.length) return [];
-  const text = [recipe.name, recipe.main, recipe.type, ...(recipe.kw || []),
-    ...recipe.ing.flatMap(ingredient => [ingredient.m, ingredient.label]),
-    ...(recipe.steps || []), JSON.stringify(recipe.subs || {})].join(' ');
   const words = shopWords(text);
   return selected.filter(allergy => {
     const preset = ALLERGY_PRESETS.find(item => item.id === allergy);
     return (preset?.terms || [allergy]).some(term => includesWordPhrase(words, term));
   });
+}
+function matchingRecipeAllergies(recipe) {
+  const text = [recipe.name, recipe.main, recipe.type, ...(recipe.kw || []),
+    ...recipe.ing.flatMap(ingredient => [ingredient.m, ingredient.label]),
+    ...(recipe.steps || [])].join(' ');
+  return matchingAllergiesInText(text);
+}
+function safeSubstitution(recipe, ingredient) {
+  const substitution = recipe.subs?.[ingredient.m];
+  if (!substitution) return null;
+  const text = [...(substitution.use || []), substitution.text || ''].join(' ');
+  return matchingAllergiesInText(text).length ? null : substitution;
 }
 const recipeAllowed = recipe => matchingRecipeAllergies(recipe).length === 0;
 const recipeCandidates = () => RECIPES.filter(recipeAllowed);
@@ -829,7 +838,10 @@ const canMake = r => r.ing.every(g => has(g.m));
 function missingOf(r) { return r.ing.filter(g => !has(g.m)); }
 function canMakeWithSub(r) {
   const miss = missingOf(r);
-  return miss.length > 0 && r.subs && miss.every(g => r.subs[g.m] && r.subs[g.m].use.every(has));
+  return miss.length > 0 && miss.every(g => {
+    const substitution = safeSubstitution(r, g);
+    return substitution && substitution.use.every(has);
+  });
 }
 function recipeUrgency(r) {
   let best = 99;
@@ -1172,21 +1184,23 @@ function renderApp() {
   else if (S.tab === 'scan') body = renderScan();
   else if (S.tab === 'reels') body = renderReels();
   else if (S.tab === 'settings') body = S.setPage === 'deals' ? renderDeals() : renderSettings();
-  const receiptWorking = S.scan?.mode === 'receipt' && S.scan?.stage === 'analyzing' && S.scan?.inAppBackground;
-  const cam = (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage) && !receiptWorking) ? renderCamera() : '';
-  return `<div class="view page-content page-${S.tab}">${receiptStatusBanner()}${body}</div>${tabbar()}${cam}`;
+  const photoWorking = ['receipt', 'pantry'].includes(S.scan?.mode) && S.scan?.stage === 'analyzing' && S.scan?.inAppBackground;
+  const cam = (S.tab === 'scan' && S.scan && ['camera', 'analyzing', 'error'].includes(S.scan.stage) && !photoWorking) ? renderCamera() : '';
+  return `<div class="view page-content page-${S.tab}">${scanStatusBanner()}${body}</div>${tabbar()}${cam}`;
 }
-function receiptStatusBanner() {
+function scanStatusBanner() {
   const sc = S.scan;
-  if (!sc?.inAppBackground || sc.mode !== 'receipt' || S.tab === 'scan') return '';
+  if (!sc?.inAppBackground || !['receipt', 'pantry'].includes(sc.mode) || S.tab === 'scan') return '';
+  const pantry = sc.mode === 'pantry';
+  const label = pantry ? 'pantry photo' : 'receipt';
   if (sc.stage === 'analyzing') return `<div class="receipt-status processing" role="status" aria-live="polite">
-    <span class="receipt-status-spinner" aria-hidden="true"></span><span><b>Reading your receipt…</b><small>You can keep using MyPantry.</small></span>
+    <span class="receipt-status-spinner" aria-hidden="true"></span><span><b>${pantry ? 'Finding food in your photo…' : 'Reading your receipt…'}</b><small>You can keep using MyPantry.</small></span>
   </div>`;
   if (sc.stage === 'review') return `<div class="receipt-status ready" role="status" aria-live="polite">
-    ${ic('check')}<span><b>Receipt processed</b><small>${plural(sc.items.length, 'item')} ready to review.</small></span><button data-act="receiptStatus">Review contents</button>
+    ${ic('check')}<span><b>${pantry ? 'Pantry photo processed' : 'Receipt processed'}</b><small>${plural(sc.items.length, 'item')} ready to review.</small></span><button data-act="receiptStatus">Review contents</button>
   </div>`;
   if (sc.stage === 'error') return `<div class="receipt-status failed" role="status" aria-live="polite">
-    ${ic('alert')}<span><b>Receipt wasn’t processed</b><small>${esc(sc.error || 'Open the scanner to try again.')}</small></span><button data-act="receiptStatus">View options</button>
+    ${ic('alert')}<span><b>${pantry ? 'Pantry photo wasn’t processed' : 'Receipt wasn’t processed'}</b><small>${esc(sc.error || `Open the scanner to try the ${label} again.`)}</small></span><button data-act="receiptStatus">View options</button>
   </div>`;
   return '';
 }
@@ -1399,7 +1413,8 @@ async function reply(text) {
 }
 function subBlock(r) {
   const miss = missingOf(r)[0];
-  return `<div class="sub-card"><b>Almost there: ${esc(r.name)}</b><br>You're missing ${esc(miss.m)}. ${esc(r.subs[miss.m].text)}</div>${rcard(r, { sub: true })}`;
+  const substitution = safeSubstitution(r, miss);
+  return substitution ? `<div class="sub-card"><b>Almost there: ${esc(r.name)}</b><br>You're missing ${esc(miss.m)}. ${esc(substitution.text)}</div>${rcard(r, { sub: true })}` : '';
 }
 
 /* ===========================================================
@@ -1891,23 +1906,27 @@ function renderScan() {
   const sc = S.scan;
   if (!sc || sc.stage === 'menu') return scanMenu();
   if (sc.stage === 'preparing' || sc.stage === 'editing') return renderReceiptEditor(sc);
-  if (sc.mode === 'receipt' && sc.stage === 'analyzing' && sc.inAppBackground) return renderReceiptProcessing();
+  if (['receipt', 'pantry'].includes(sc.mode) && sc.stage === 'analyzing' && sc.inAppBackground) return renderPhotoProcessing(sc);
   if (sc.stage === 'review') return renderReview();
   if (sc.stage === 'done') return renderDone();
   return scanMenu();
 }
-function renderReceiptProcessing() {
-  return `<div class="appbar receipt-processing-head"><button class="close" data-act="scanCancel" aria-label="Cancel receipt processing">${ic('x')}</button><h1>Receipt scan</h1><span aria-hidden="true"></span></div>
+function renderPhotoProcessing(sc) {
+  const pantry = sc.mode === 'pantry';
+  const label = pantry ? 'pantry photo' : 'receipt';
+  return `<div class="appbar receipt-processing-head"><button class="close" data-act="scanCancel" aria-label="Cancel ${label} processing">${ic('x')}</button><h1>${pantry ? 'Pantry scan' : 'Receipt scan'}</h1><span aria-hidden="true"></span></div>
   <div class="scroll"><div class="receipt-processing-page" role="status" aria-live="polite">
-    <span class="receipt-processing-spinner" aria-hidden="true"></span><h2>Reading your receipt…</h2>
+    <span class="receipt-processing-spinner" aria-hidden="true"></span><h2>${pantry ? 'Finding food in your photo…' : 'Reading your receipt…'}</h2>
     <p>We’ll keep working while you use another part of MyPantry.</p>
     <button class="btn btn-primary" data-act="tab" data-arg="home">Continue to Home</button>
   </div></div>`;
 }
 function cancelReceiptModal() {
+  const pantry = S.scan?.mode === 'pantry';
+  const label = pantry ? 'pantry photo' : 'receipt';
   return `<div class="icon-hero" style="background:var(--butter-soft);color:var(--butter)">${ic('receipt')}</div>
-    <h2>Cancel receipt processing?</h2>
-    <p>The current scan result will be discarded. You’ll need to submit the receipt again if you still want to add it.</p>
+    <h2>Cancel ${label} processing?</h2>
+    <p>The current scan result will be discarded. You’ll need to submit the ${label} again if you still want to add it.</p>
     <button class="btn btn-danger" data-act="cancelReceiptScan">Cancel processing</button>
     <button class="btn btn-ghost" data-act="closeSheet">Keep processing</button>`;
 }
@@ -1924,13 +1943,13 @@ function dismissReceiptCancel() {
   if (scrim?.dataset.receiptCancel === 'true') closeSheet();
 }
 function scanMenu() {
-  const o = (mode, icon, title, sub, tint, feat) => `<button class="opt ${feat ? 'featured' : ''}" data-act="${mode === 'manual' ? 'manual' : 'startScan'}" data-arg="${mode}">
-      <span class="oi" style="${feat ? '' : `background:${tint}`}">${ic(icon)}</span><span><b>${title}</b><span>${sub}</span></span>${`<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">${P.right}</svg>`}</button>`;
+  const o = (mode, icon, title, sub, tint, feat, tone) => `<button class="opt ${feat ? 'featured' : ''} ${tone ? `tinted ${tone}` : ''}" data-act="${mode === 'manual' ? 'manual' : 'startScan'}" data-arg="${mode}">
+      <span class="oi" style="${feat || tone ? '' : `background:${tint}`}">${ic(icon)}</span><span><b>${title}</b><span>${sub}</span></span>${`<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">${P.right}</svg>`}</button>`;
   return `<div class="scroll"><div class="scan-h"><h1>Start Logging Your Food</h1><p>Pick the fastest way. You'll review everything before it's saved.</p></div>
     <div class="opts">
-      ${o('pantry', 'fridge', 'Take a picture of your pantry or fridge', 'Logs many items at once', '', true)}
-      ${o('receipt', 'receipt', 'Take a picture of your receipt', 'Best right after shopping', 'var(--butter-soft)')}
-      ${o('barcode', 'barcode', "Scan your item's bar code", 'One item at a time', 'var(--sky-soft)')}
+      ${o('pantry', 'fridge', 'Take a picture of your pantry or fridge', 'Logs many items at once', '', false, 'pantry')}
+      ${o('receipt', 'receipt', 'Take a picture of your receipt', 'Best right after shopping', '', false, 'receipt')}
+      ${o('barcode', 'barcode', "Scan your item's bar code", 'One item at a time', '', false, 'barcode')}
       ${o('manual', 'pencil', 'Enter item details yourself', 'Type the name, amount and date', 'var(--surface-3)')}
     </div>
     <div class="tip"><b>Tip:</b> Photos work best in good light with labels facing the camera. We read best-by dates when we can see them and estimate the rest.</div>
@@ -2239,7 +2258,7 @@ async function scanPhoto(file, diagnostics = {}) {
   const current = () => S.scan === sc && generation === accountGeneration;
   const fail = message => { if (!current()) return; dismissReceiptCancel(); sc.stage = 'error'; sc.error = message; render(); };
   sc.stage = 'analyzing'; sc.error = null;
-  if (sc.mode === 'receipt') { sc.inAppBackground = true; S.tab = 'home'; }
+  if (['receipt', 'pantry'].includes(sc.mode)) { sc.inAppBackground = true; S.tab = 'home'; }
   render();
   const requestStarted = performance.now();
   let image;
@@ -2677,6 +2696,9 @@ function recipeSheet(r) {
   const blocked = matchingRecipeAllergies(r);
   const shopNeeded = !blocked.length && pantryReady && shopNeeds(r).length > 0;
   const canUse = !blocked.length && pantryReady && canMake(r) && !shopNeeded;
+  const suggestedSubstitution = !blocked.length && pantryReady
+    ? missingOf(r).map(ingredient => safeSubstitution(r, ingredient)).find(Boolean)
+    : null;
   return `<div class="sheet-head"><h2>${esc(r.name)}</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body">
     <div class="recipe-hero" style="background:${r.bg}">${r.emoji}</div>
@@ -2686,10 +2708,10 @@ function recipeSheet(r) {
     <ul class="ing-list">${r.ing.map(g => {
       const matches = pantryReady ? findItems(g.m) : [], it = matches.find(item => daysLeft(item) >= 0);
       const checkDate = !it && matches.length > 0;
-      const sub = !it && !checkDate && r.subs && r.subs[g.m];
+      const sub = !it && !checkDate && safeSubstitution(r, g);
       return `<li><span class="em">${it ? (it.emoji || '📦') : '➖'}</span><span>${esc(g.label)}<span class="amt">${!pantryReady ? 'Pantry not loaded' : it ? `Listed: ${qtyText(it.qty, it.unit)}${matches.length > 1 ? ' and more' : ''}` : checkDate ? 'Matching pantry food needs a date check' : sub ? 'Missing; see substitution below' : 'Not on your pantry list'}</span></span>${it ? pillFor(it) : `<span class="pill soon">${!pantryReady ? 'Wait' : checkDate ? 'Check' : 'Need'}</span>`}</li>`;
     }).join('')}</ul></div>
-    ${!blocked.length && r.subs && pantryReady && !canUse ? `<div class="sub-card">${esc(Object.values(r.subs)[0].text)}</div>` : ''}
+    ${suggestedSubstitution && !canUse ? `<div class="sub-card">${esc(suggestedSubstitution.text)}</div>` : ''}
     <div><div class="lbl" style="margin-bottom:6px">Steps</div><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>
   </div>
   <div class="sheet-foot">${canUse ? `<button class="btn btn-primary" data-act="useAsk" data-arg="${r.id}">I used this recipe</button>` : ''}
@@ -3181,7 +3203,7 @@ const ACT = {
     if (!isDemoAccount()) void startCameraPreview(S.scan);
   },
   scanCancel() {
-    if (S.scan?.mode === 'receipt' && S.scan.stage === 'analyzing') {
+    if (['receipt', 'pantry'].includes(S.scan?.mode) && S.scan.stage === 'analyzing') {
       const scrim = openSheet(cancelReceiptModal(), { center: true }); scrim.dataset.receiptCancel = 'true'; return;
     }
     if (S.scan?.stage === 'review') { openSheet(discardScanReviewModal(), { center: true }); return; }
@@ -3269,7 +3291,7 @@ const ACT = {
   openSaved() { S.tab = 'reels'; S.reelView = 'saved'; render(); },
   askMissing(id) { ACT.shopForRecipe(id); },
   shopForRecipe(id) {
-    if (!R(id)) return;
+    if (!R(id) || !recipeAllowed(R(id))) return toast('This recipe matches your allergy list.', null, 'alert');
     closeSheet(); S.shopRecipeId = id;
     if (S.tab !== 'settings' || S.setPage !== 'deals') S.shopReturnTab = S.tab;
     S.tab = 'settings'; S.setPage = 'deals'; render();
@@ -3282,9 +3304,11 @@ const ACT = {
   share(id) { openSheet(shareSheet(R(id))); },
   shareTo(who) { closeSheet(); toast(who === 'link' ? 'Link copied' : `Sent to ${esc(who)}`, null, 'share'); },
   recipe(id) { openSheet(recipeSheet(R(id))); },
-  useAsk(id) { const r = R(id); if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; } openSheet(useSheet(r)); },
+  useAsk(id) { const r = R(id); if (!r || !recipeAllowed(r)) { closeSheet(); toast('This recipe matches your allergy list.', null, 'alert'); return; } if (!canMake(r)) { toast('You no longer have everything for this recipe', null, 'alert'); return; } openSheet(useSheet(r)); },
   async useConfirm(id) {
-    const r = R(id), before = snapshot(); useRecipe(r);
+    const r = R(id);
+    if (!r || !recipeAllowed(r)) { closeSheet(); toast('This recipe matches your allergy list.', null, 'alert'); return; }
+    const before = snapshot(); useRecipe(r);
     if (!await applyPantryTransition(JSON.parse(before), JSON.parse(snapshot()))) return;
     closeSheet();
     const snap = S.undo;

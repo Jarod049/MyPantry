@@ -453,6 +453,8 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   assert.match(f.text(), /Snap your fridge/);
   receiptPhoto(f); await settle();
   assert.equal(calls.length, 1); assert.equal(calls[0].kind, 'pantry');
+  assert.match(f.text(), /Pantry photo processed/);
+  f.click('[data-act="receiptStatus"]');
   assert.match(f.text(), /We found 3 items/);
   assert.match(f.text(), /Read from label/);
   f.click('[data-act="confirmScan"]'); await tick();
@@ -464,11 +466,36 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   assert.equal(peas.expiration_source, 'ai'); assert.equal(peas.storage_location, 'Freezer');
   assert.equal(database.find(r => r.ingredient_name === 'Apples').expiration_source, 'ai');
 });
+test('pantry processing uses the global progress flow while the user navigates', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  let finish;
+  f.w.fetch = () => new Promise(resolve => { finish = resolve; });
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="pantry"]');
+  receiptPhoto(f); await tick();
+  assert.ok(f.w.document.querySelector('.page-home .receipt-status.processing'));
+  assert.match(f.text(), /Finding food in your photo/);
+  assert.match(f.text(), /You can keep using MyPantry/);
+  f.click('[data-act="tab"][data-arg="scan"]');
+  assert.ok(f.w.document.querySelector('.receipt-processing-page'));
+  assert.match(f.text(), /Pantry scan/);
+  assert.equal(f.w.document.querySelector('.camera'), null);
+  f.click('[data-act="tab"][data-arg="ing"]');
+  assert.ok(f.w.document.querySelector('.page-ing .receipt-status.processing'));
+  finish({ ok: true, headers: { get: () => '' }, json: async () => ({ readable: true, store_name: null, items: [
+    { name: 'Apples', category: 'Fruits', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null }
+  ] }) });
+  await settle();
+  assert.match(f.text(), /Pantry photo processed/);
+  f.click('[data-act="receiptStatus"]');
+  assert.match(f.text(), /We found 1 item/);
+});
 test('empty fridge photo shows a friendly error', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
   f.w.fetch = async () => ({ ok: true, json: async () => ({ readable: true, store_name: null, items: [] }) });
   f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="pantry"]');
   receiptPhoto(f); await settle();
+  assert.match(f.text(), /Pantry photo wasn’t processed/);
+  f.click('[data-act="receiptStatus"]');
   assert.match(f.w.document.querySelector('.cam-error').textContent, /didn't spot any food/);
 });
 test('bar code scan looks up USDA data, opens the editor, and inserts the confirmed item', async t => {
@@ -822,6 +849,25 @@ test('preset and custom allergies sync and remove matching recipe suggestions', 
   assert.deepEqual(JSON.parse(JSON.stringify(synced.upsert[0].recipe_preferences.allergies)), ['eggs', 'mustard']);
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
   assert.equal(f.w.document.querySelector('.reel[data-id="scrambled"]'), null);
+});
+test('allergy aliases block base ingredients without blocking a recipe for an unsafe optional substitution', async t => {
+  const owner = 'allergy-alias-user';
+  const database = [pantryRow(1, 'Chicken', 2, 'lb', owner), pantryRow(2, 'Peanut butter', 1, 'jar', owner), pantryRow(3, 'Whey protein', 1, 'bag', owner)];
+  const recipe = (recipe_id, name, ingredients, substitutions = null) => ({ recipe_id, name, emoji: '🍲', cuisine: 'Dinner', main_ingredient: ingredients[0].m,
+    minutes: 20, serves: 4, base_likes: 0, background: null, keywords: [], ingredients, steps: ['Cook and serve'], substitutions, is_published: true, sort_order: 0 });
+  const tables = { recipe: [
+    recipe('safe-chicken', 'Simple Chicken Bowl', [{ m: 'chicken', a: 1, label: '1 lb chicken' }, { m: 'rice', a: .5, label: '1 cup rice' }],
+      { rice: { use: ['peanut butter'], text: 'Swap rice for peanut butter.' } }),
+    recipe('whey-shake', 'Protein Shake', [{ m: 'whey protein', a: 1, label: '1 scoop whey protein' }])
+  ] };
+  const f = boot({ id: owner, database, tables, noCatalog: true }); t.after(() => f.dom.window.close()); await settle();
+  f.click('[data-act="tab"][data-arg="settings"]'); f.click('[data-act="editAllergies"]');
+  f.click('[data-act="allergyToggle"][data-arg="milk"]'); f.click('[data-act="allergyToggle"][data-arg="peanuts"]'); f.click('[data-act="allergySave"]');
+  f.click('[data-act="tab"][data-arg="reels"]'); f.click('[data-act="reelMore"][data-arg="on"]'); await tick();
+  assert.ok(f.w.document.querySelector('.reel[data-id="safe-chicken"]'), 'base recipe remains available');
+  assert.equal(f.w.document.querySelector('.reel[data-id="whey-shake"]'), null, 'milk derivative is filtered');
+  f.click('.reel[data-id="safe-chicken"] [data-act="recipe"]');
+  assert.doesNotMatch(f.w.document.querySelector('.sheet').textContent, /peanut butter/i, 'unsafe optional substitution is hidden');
 });
 test('theme picker defaults to paprika and persists all palette choices with the account', async t => {
   const f = boot({ id: 'theme-user', database: [] }); t.after(() => f.dom.window.close()); await tick();
