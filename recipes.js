@@ -11,10 +11,9 @@
 (function (root) {
   'use strict';
   const bg = h => `radial-gradient(circle at 50% 35%, hsl(${h} 72% 58%), hsl(${h} 70% 27%) 55%, hsl(${h} 72% 8%))`;
-  const likes = id => { let n = 0; for (const c of id) n = (n * 31 + c.charCodeAt(0)) >>> 0; return 300 + n % 5200; };
   function r(id, name, emoji, type, main, time, serves, hue, ing, steps, kw = []) {
     return {
-      id, name, emoji, type, main, time, serves, likes: likes(id), bg: bg(hue), kw,
+      id, name, emoji, type, main, time, serves, bg: bg(hue), kw,
       ing: ing.split(';').map(s => s.trim()).filter(Boolean).map(s => {
         const [m, a, label] = s.split('=').map(x => x.trim());
         return { m: m.replace(/\//g, '|'), a: Number(a), label };
