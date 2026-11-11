@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good' } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, recipeRpcError, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good' } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -98,8 +98,31 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
         };
       }
     },
+    async rpc(name, args) {
+      queries.push({ rpc: name, args });
+      if (name !== 'record_recipe_use') return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+      if (recipeRpcError) return { data: null, error: new Error(recipeRpcError) };
+      const events = mockTables.recipe_use_events ||= [];
+      const existing = events.find(row => row.event_id === args.p_event_id && row.user_id === saved?.user.id);
+      if (existing) return { data: { event: existing }, error: null };
+      const pantry = database || [];
+      const consumed = args.p_consumption.map(item => ({
+        item, row: pantry.find(row => row.ingredient_id === item.ingredient_id && row.auth_user_id === saved?.user.id)
+      }));
+      if (consumed.some(({ item, row }) => !row || row.quantity !== item.from_quantity)) {
+        return { data: null, error: new Error('Pantry quantity changed') };
+      }
+      for (const { item, row } of consumed) {
+        if (item.to_quantity === 0) pantry.splice(pantry.indexOf(row), 1);
+        else row.quantity = item.to_quantity;
+      }
+      const event = { event_id: args.p_event_id, user_id: saved.user.id, source: args.p_source,
+        recipe_id: args.p_recipe_id, recipe_name: args.p_recipe_name, used_at: new Date().toISOString() };
+      events.push(event);
+      return { data: { event }, error: null };
+    },
     from(table) {
-      let action = null, rowsToWrite = null, single = false, limitCount = null;
+      let action = null, rowsToWrite = null, single = false, limitCount = null, rangeStart = null, rangeEnd = null;
       const filters = {};
       const builder = {
         insert(rows) { action = 'insert'; rowsToWrite = Array.isArray(rows) ? rows : [rows]; queries.push({ table, insert: rowsToWrite }); return this; },
@@ -110,6 +133,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
         eq(column, value) { filters[column] = value; queries.push({ table, column, value }); return this; },
         order() { return this; },
         limit(value) { limitCount = value; return this; },
+        range(start, end) { rangeStart = start; rangeEnd = end; return this; },
         maybeSingle() { single = true; return this; },
         single() { single = true; return this; },
         then(resolve, reject) { return Promise.resolve().then(async () => {
@@ -119,6 +143,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
             const target = table === 'pantry_item' ? (database || []) : (mockTables[table] ||= []);
             const written = rowsToWrite.map((row, i) => ({ ...row,
               ...(table === 'pantry_item' ? { ingredient_id: (database?.length || 0) + i + 1 } : {}),
+              ...(table === 'recipe_use_events' ? { used_at: new Date().toISOString() } : {}),
               ...(table === 'app_sessions' ? { started_at: new Date().toISOString(), last_active_at: new Date().toISOString(), ended_at: null, end_reason: null } : {})
             }));
             if (action === 'upsert') {
@@ -146,6 +171,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
             ? (load ? await load() : { data: (database || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null })
             : { data: (mockTables[table] || []).filter(row => Object.entries(filters).every(([key, value]) => row[key] === value)), error: null };
           let data = result.data;
+          if (Array.isArray(data) && rangeStart != null) data = data.slice(rangeStart, rangeEnd + 1);
           if (Array.isArray(data) && limitCount != null) data = data.slice(0, limitCount);
           return single ? { data: Array.isArray(data) ? data[0] || null : data, error: result.error } : { ...result, data };
         }).then(resolve, reject); }
@@ -929,4 +955,96 @@ test('published recipes from Supabase are added to Reels', async t => {
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
   assert.ok(f.queries.some(q => q.table === 'recipe' && q.column === 'is_published'));
   assert.ok(f.w.document.querySelector('.reel[data-id="supa-toast"]'));
+});
+
+test('Ingredients counts confirmed Reels and Pantry Pal recipes by month and keeps history account-owned', async t => {
+  const owner = 'recipe-history';
+  const thisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 5).toISOString();
+  const lastMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 5).toISOString();
+  const tables = { recipe_use_events: [
+    { event_id: 'reel-use', user_id: owner, source: 'reels', recipe_id: 'scrambled', recipe_name: 'Eggs on Toast', used_at: thisMonth },
+    { event_id: 'ai-use', user_id: owner, source: 'ai', recipe_id: null, recipe_name: 'AI Soup', used_at: thisMonth },
+    { event_id: 'older-use', user_id: owner, source: 'ai', recipe_id: null, recipe_name: 'Old Soup', used_at: lastMonth },
+    { event_id: 'other-account', user_id: 'someone-else', source: 'ai', recipe_id: null, recipe_name: 'Private Meal', used_at: thisMonth }
+  ] };
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', owner)];
+  const f = boot({ id: owner, database, tables }); t.after(() => f.dom.window.close()); await settle();
+  f.click('[data-act="tab"][data-arg="ing"]');
+  const card = f.w.document.querySelector('.recipe-use-card');
+  assert.match(card.textContent, /2 recipes made this month/);
+  assert.match(card.textContent, /1 from Reels · 1 from Pantry Pal/);
+  f.click('[data-act="recipeUseHistory"]');
+  const history = f.w.document.querySelector('#recipeUseHistorySheet');
+  assert.match(history.textContent, /2 recipes this month: 1 Reels · 1 Pantry Pal/);
+  assert.match(history.textContent, /3 total: 1 Reels · 2 Pantry Pal/);
+  assert.equal(history.querySelectorAll('.recipe-use-row').length, 3);
+  assert.doesNotMatch(history.textContent, /Private Meal/);
+  f.click('[data-act="recipeUseRemoveAsk"][data-arg="ai-use"]');
+  f.click('[data-act="recipeUseRemoveConfirm"]'); await settle();
+  assert.equal(f.mockTables.recipe_use_events.some(row => row.event_id === 'ai-use'), false);
+  assert.equal(database[0].quantity, 12, 'removing history does not change Ingredients');
+  assert.match(f.w.document.querySelector('#recipeUseHistorySheet').textContent, /1 recipe this month: 1 Reels · 0 Pantry Pal/);
+});
+
+test('Pantry Pal recipe logging validates the name and saves one AI use without consuming food', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'ai-cook')];
+  const f = boot({ id: 'ai-cook', database }); t.after(() => f.dom.window.close()); await settle();
+  f.click('[data-act="aiRecipeUseStart"]');
+  f.click('#aiRecipeUseSaveBtn');
+  assert.equal(f.w.document.querySelector('#aiRecipeNameErr').hidden, false);
+  assert.equal(f.queries.filter(query => query.table === 'recipe_use_events' && query.insert).length, 0);
+  f.w.document.querySelector('#aiRecipeName').value = '  Egg   fried rice  ';
+  f.click('#aiRecipeUseSaveBtn'); await settle();
+  const use = f.mockTables.recipe_use_events[0];
+  assert.equal(use.user_id, 'ai-cook');
+  assert.equal(use.source, 'ai');
+  assert.equal(use.recipe_id, null);
+  assert.equal(use.recipe_name, 'Egg fried rice');
+  assert.equal(f.mockTables.recipe_use_events.length, 1);
+  assert.equal(database[0].quantity, 12);
+  assert.equal(f.queries.some(query => query.rpc === 'record_recipe_use'), false);
+  f.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(f.w.document.querySelector('.recipe-use-card').textContent, /1 recipe made this month/);
+  assert.match(f.w.document.querySelector('.recipe-use-card').textContent, /0 from Reels · 1 from Pantry Pal/);
+});
+
+test('confirming a Reel records one use with its pantry changes, and Undo reverses both', async t => {
+  const owner = 'reel-cook';
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', owner), pantryRow(2, 'Sandwich bread', 1, 'loaf', owner), pantryRow(3, 'Butter', 1, 'lb', owner)];
+  const f = boot({ id: owner, database }); t.after(() => f.dom.window.close()); await settle();
+  f.click('[data-act="tab"][data-arg="reels"]');
+  f.click('[data-act="useAsk"][data-arg="scrambled"]');
+  f.click('[data-act="useConfirm"]');
+  f.click('[data-act="useConfirm"]'); await settle();
+  const calls = f.queries.filter(query => query.rpc === 'record_recipe_use');
+  assert.equal(calls.length, 1, 'rapid confirmation cannot log the same meal twice');
+  assert.equal(calls[0].args.p_source, 'reels');
+  assert.equal(calls[0].args.p_recipe_id, 'scrambled');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args.p_consumption)), [
+    { ingredient_id: 1, from_quantity: 12, to_quantity: 8 },
+    { ingredient_id: 2, from_quantity: 1, to_quantity: .87 },
+    { ingredient_id: 3, from_quantity: 1, to_quantity: .97 }
+  ]);
+  assert.deepEqual(database.map(row => row.quantity), [8, .87, .97]);
+  assert.equal(f.mockTables.recipe_use_events.length, 1);
+  f.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(f.w.document.querySelector('.recipe-use-card').textContent, /1 from Reels/);
+  f.click('.toast button'); await settle();
+  assert.deepEqual(database.map(row => row.quantity), [12, 1, 1]);
+  assert.equal(f.mockTables.recipe_use_events.length, 0);
+  assert.match(f.w.document.querySelector('.recipe-use-card').textContent, /0 recipes made this month/);
+});
+
+test('a failed Reel recipe update leaves pantry quantities and recipe count unchanged', async t => {
+  const owner = 'failed-reel-cook';
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', owner), pantryRow(2, 'Sandwich bread', 1, 'loaf', owner), pantryRow(3, 'Butter', 1, 'lb', owner)];
+  const f = boot({ id: owner, database, recipeRpcError: 'Database error' }); t.after(() => f.dom.window.close()); await settle();
+  f.click('[data-act="tab"][data-arg="reels"]');
+  f.click('[data-act="useAsk"][data-arg="scrambled"]');
+  f.click('[data-act="useConfirm"]'); await settle();
+  assert.deepEqual(database.map(row => row.quantity), [12, 1, 1]);
+  assert.equal(f.mockTables.recipe_use_events?.length || 0, 0);
+  assert.match(f.w.document.querySelector('.toast').textContent, /Couldn’t confirm the recipe/);
+  f.click('[data-act="tab"][data-arg="ing"]');
+  assert.match(f.w.document.querySelector('.recipe-use-card').textContent, /0 recipes made this month/);
 });
