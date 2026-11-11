@@ -1004,3 +1004,38 @@ test('sign-up keeps Create account in a sticky bar and Enter moves between field
   doc.querySelector('#su_pw2').focus(); enter(doc.querySelector('#su_pw2'));
   assert.notEqual(doc.activeElement.id, 'su_pw2', 'invalid form closes the keyboard instead of submitting');
 });
+
+test('spoil date cannot be set in the past when adding food', async t => {
+  const database = [];
+  const f = boot({ id: 'pastdate', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="manual"]');
+  const doc = f.w.document;
+  const exp = doc.getElementById('f_exp');
+  assert.equal(exp.min, soonDate(0), 'date picker starts at today');
+  for (const [id, value] of Object.entries({ f_name: 'Old yogurt', f_qty: '1', f_unit: 'ct', f_cat: 'Other', f_exp: soonDate(-3) })) doc.getElementById(id).value = value;
+  exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(doc.getElementById('f_expErr').hidden, false, 'error shows right away');
+  f.click('#saveItemBtn'); await tick();
+  assert.equal(database.length, 0, 'nothing is saved');
+  assert.ok(doc.getElementById('itemForm'), 'form stays open');
+  exp.value = soonDate(0); exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(doc.getElementById('f_expErr').hidden, true);
+  f.click('#saveItemBtn'); await tick(); await tick();
+  assert.equal(database.length, 1, 'today is allowed');
+});
+test('an existing item with a passed date keeps it, but a new past date is rejected', async t => {
+  const database = [{ ...pantryRow(1, 'Old milk', 1, 'gal', 'oldedit'), expiration_date: soonDate(-2) }];
+  const f = boot({ id: 'oldedit', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="ing"]'); await tick();
+  f.click('#ingList [data-act="edit"]'); await tick();
+  const doc = f.w.document, exp = doc.getElementById('f_exp');
+  const change = () => exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(exp.value, soonDate(-2));
+  change();
+  assert.equal(doc.getElementById('f_expErr').hidden, true, 'unchanged passed date is allowed');
+  exp.value = soonDate(-5); change();
+  assert.equal(doc.getElementById('f_expErr').hidden, false, 'a different past date is rejected');
+  f.click('#saveItemBtn'); await tick();
+  assert.ok(!f.queries.some(q => q.table === 'pantry_item' && q.update), 'nothing is sent to the database');
+});

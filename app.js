@@ -61,6 +61,10 @@ const pad2 = n => String(n).padStart(2, '0');
 const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const inDays = n => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return isoOf(d); };
 const parseIso = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const todayIso = () => isoOf(new Date());
+// A typed spoil date may not be in the past. An existing item's unchanged date is
+// still allowed, so food that already passed its date can be edited or logged.
+const pastSpoilDate = (value, original = '') => !!value && value < todayIso() && value !== original;
 const daysLeft = it => Math.round((parseIso(it.exp) - TODAY) / DAY);
 const fmtDate = s => parseIso(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -1833,7 +1837,7 @@ function itemForm(it, mode) {
     <div class="est-note">For packaged food, choose box, bag or can and enter how many you have.</div>
     <div class="field"><label for="f_cat">Food category</label><select class="input" id="f_cat">${CATS.map(c => `<option ${c === (it.cat || 'Other') ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><span class="lbl">Stored in</span><div class="store-sel" id="f_store" role="radiogroup">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button type="button" role="radio" aria-checked="${s === (it.store || 'Fridge')}" class="${s === (it.store || 'Fridge') ? 'on' : ''}" data-store="${s}" style="flex:1;padding:8px">${s}</button>`).join('')}</div></div>
-    <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" value="${it.exp || ''}"></div>
+    <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" min="${todayIso()}" data-orig="${esc(it.exp || '')}" value="${it.exp || ''}"><span class="field-err" id="f_expErr" hidden>Spoil date can't be in the past. Choose today or a later date.</span></div>
     <div class="est-note">${srcNote}</div>
   </form>
   <div class="sheet-foot">
@@ -1853,6 +1857,14 @@ function openItemForm(it, mode) {
     btn.disabled = !ok;
   };
   qty.addEventListener('input', validate);
+  const exp = $('#f_exp');
+  const checkExp = () => {
+    const bad = pastSpoilDate(exp.value, exp.dataset.orig);
+    exp.classList.toggle('bad', bad);
+    $('#f_expErr').hidden = !bad;
+  };
+  exp.addEventListener('input', checkExp);
+  exp.addEventListener('change', checkExp);
   $$('#f_store button').forEach(b => b.onclick = () => {
     $$('#f_store button').forEach(x => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
     b.classList.add('on'); b.setAttribute('aria-checked', 'true');
@@ -1887,6 +1899,10 @@ function readItemForm() {
   const cat = $('#f_cat').value;
   const store = $('#f_store .on')?.dataset.store || 'Fridge';
   const expIn = $('#f_exp').value;
+  if (pastSpoilDate(expIn, $('#f_exp').dataset.orig)) {
+    $('#f_expErr').hidden = false; $('#f_exp').classList.add('bad'); $('#f_exp').focus();
+    return null;
+  }
   return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
 }
 
