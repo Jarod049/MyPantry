@@ -84,3 +84,13 @@ Camera scan screens use a live rear-camera preview when `getUserMedia` is availa
 UPC/EAN food bar codes are decoded in the browser and looked up through the authenticated `barcode-lookup` Edge Function using USDA FoodData Central first and Open Food Facts as a fallback. Results open in the existing editable item form, and spoil dates use the current category and storage estimates. See [BARCODE_SETUP.md](BARCODE_SETUP.md).
 
 Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.
+
+### Sprint 3 pantry behavior
+
+| Requirement | Implementation |
+| --- | --- |
+| Track progress toward 80% weekly use | [Weekly session report](supabase/reports/weekly-active-users.sql), run in the Supabase SQL editor by a project admin. The report counts distinct users with a recorded session start in the last completed Mountain Time week, among confirmed accounts that already existed when the week began. It does not count a session that started before the week. |
+| Classify meat snacks separately from raw meat | Recognized meat sticks and jerky receive a planning reminder when no package date is available. Follow the package label and storage directions. |
+| Show recognizable icons for scanned food | Match full food names and common plurals; use the neutral icon when there is no reliable match. |
+| Group Going bad soon by category | Keep the existing search and filters, and sort items by date within their food categories. |
+| Remove an ingredient from chat only when asked | Type an explicit command such as “Remove Apples from my pantry.” A unique exact match opens a confirmation. Ambiguous names direct the user to Ingredients. |
