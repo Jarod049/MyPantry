@@ -449,7 +449,9 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   const calls = [];
   f.w.fetch = async (url, options) => { calls.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ readable: true, store_name: null, items: [
     { name: 'Greek yogurt', category: 'Dairy & Eggs', quantity: 32, unit: 'oz', storage: 'Fridge', label_date: '2030-02-14' },
-    { name: 'Apples', category: 'Produce', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Pineapple', category: 'Fruits', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Beef Meat Stick', category: 'Meat & Seafood', quantity: 1, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Raw Beef', category: 'Meat & Seafood', quantity: 1, unit: 'ct', storage: 'Fridge', label_date: null },
     { name: 'Frozen peas', category: 'Frozen', quantity: 1, unit: 'bag', storage: 'Freezer', label_date: '2030-03-01' }
   ] }) }; };
   f.click('[data-act="tab"][data-arg="scan"]');
@@ -460,16 +462,20 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   assert.equal(calls.length, 1); assert.equal(calls[0].kind, 'pantry');
   assert.match(f.text(), /Pantry photo processed/);
   f.click('[data-act="receiptStatus"]');
-  assert.match(f.text(), /We found 3 items/);
+  assert.match(f.text(), /We found 5 items/);
   assert.match(f.text(), /Read from label/);
+  assert.match(f.text(), /🍍/);
+  assert.match(f.text(), /🥓/);
   f.click('[data-act="confirmScan"]'); await tick();
-  assert.equal(database.length, 3);
+  assert.equal(database.length, 5);
   assert.ok(database.every(r => r.way_added === 'pantry_photo' && r.auth_user_id === 'alice'));
   const yogurt = database.find(r => r.ingredient_name === 'Greek yogurt');
   assert.equal(yogurt.expiration_date, '2030-02-14'); assert.equal(yogurt.expiration_source, 'label');
   const peas = database.find(r => r.ingredient_name === 'Frozen peas');
   assert.equal(peas.expiration_source, 'ai'); assert.equal(peas.storage_location, 'Freezer');
-  assert.equal(database.find(r => r.ingredient_name === 'Apples').expiration_source, 'ai');
+  const stick = database.find(r => r.ingredient_name === 'Beef Meat Stick');
+  assert.equal(stick.food_type, 'Snacks');
+  assert.notEqual(stick.expiration_date, database.find(r => r.ingredient_name === 'Raw Beef').expiration_date);
 });
 test('pantry processing uses the global progress flow while the user navigates', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
@@ -950,12 +956,13 @@ test('Going bad soon keeps the search bar and food categories and filters by the
   assert.ok(doc.querySelector('#ingSearch'), 'search bar is shown');
   assert.ok(doc.querySelector('.cat-chips [data-act="ingCat"][data-arg="All"]'), 'category chips are shown');
   const names = () => [...doc.querySelectorAll('#ingList .item .name')].map(n => n.textContent);
-  assert.deepEqual(names(), ['Milk', 'Spinach'], 'only food going bad is listed');
+  assert.deepEqual(names(), ['Spinach', 'Milk'], 'only food going bad is listed, grouped by category');
+  assert.deepEqual([...doc.querySelectorAll('#ingList .cat h2')].map(h => h.textContent), ['Vegetables', 'Dairy & Eggs']);
   const search = doc.querySelector('#ingSearch');
   search.value = 'spin'; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
   assert.deepEqual(names(), ['Spinach']);
   search.value = ''; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
-  const dairy = doc.querySelector('.cat-chips [data-arg="Dairy"]');
+  const dairy = doc.querySelector('.cat-chips [data-arg="Dairy & Eggs"]');
   if (dairy) { dairy.click(); await tick(); assert.deepEqual(names(), ['Milk']); }
   f.click('.cat-chips [data-arg="All"]'); await tick();
   const search2 = doc.querySelector('#ingSearch');
@@ -1038,4 +1045,20 @@ test('an existing item with a passed date keeps it, but a new past date is rejec
   assert.equal(doc.getElementById('f_expErr').hidden, false, 'a different past date is rejected');
   f.click('#saveItemBtn'); await tick();
   assert.ok(!f.queries.some(q => q.table === 'pantry_item' && q.update), 'nothing is sent to the database');
+});
+
+test('chat deletion requires confirmation and only deletes the matching owned row', async t => {
+  const database = [
+    pantryRow(1, 'Apples', 2, 'ct', 'alice'),
+    pantryRow(2, 'Apples', 1, 'ct', 'bob')
+  ];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  f.form('#chatForm', { chatIn: 'Please remove Apples from my pantry.' });
+  assert.equal(database.length, 2);
+  f.click('#scrim [data-act="closeSheet"]');
+  assert.equal(database.length, 2);
+  f.form('#chatForm', { chatIn: 'Delete Apples' });
+  f.click('[data-act="chatRemoveConfirm"]'); await tick();
+  assert.deepEqual(database.map(r => r.auth_user_id), ['bob']);
+  assert.match(f.text(), /Removed Apples/);
 });

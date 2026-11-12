@@ -118,6 +118,7 @@ function qtyText(q, u) { const [v, uu] = disp(q, u); return `${v} ${unitWord(v, 
 const CATS = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dairy & Eggs', 'Grains & Bread', 'Snacks', 'Sauces & Condiments', 'Spices & Baking', 'Prepared Meals', 'Drinks', 'Other'];
 function foodCategory(name) {
   const text = name.toLowerCase();
+  if (meatSnack(text)) return 'Snacks';
   if (/\bflour tortillas?\b/.test(text)) return 'Grains & Bread';
   if (/\b(beverages?|drinks?|juice|soda|water|coffee|tea|punch|lemonade)\b/.test(text)) return 'Drinks';
   if (/\b(candy|candies|chocolates?|cookies?|crackers?|chips?|popcorn|pretzels?|granola)\b/.test(text)) return 'Snacks';
@@ -134,6 +135,7 @@ function foodCategory(name) {
   return 'Other';
 }
 function normalizeCategory(name, category) {
+  if (meatSnack(name) && (!CATS.includes(category) || category === 'Meat & Seafood')) return 'Snacks';
   if (category === 'Dairy') return 'Dairy & Eggs';
   if (CATS.includes(category)) return category;
   return foodCategory(name);
@@ -151,10 +153,40 @@ const SHELF = {
   'Drinks': { Fridge: 10, Pantry: 180, Freezer: 180 },
   'Other': { Fridge: 60, Pantry: 180, Freezer: 180 }
 };
-const estimate = (cat, store) => inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
+function meatSnack(name) {
+  return !/\b(?:raw|uncooked|fresh)\b/i.test(name) &&
+    /\b(?:jerky|(?:meat|beef|turkey|pork|chicken|snack) sticks?)\b/i.test(name);
+}
+function estimate(cat, store, name = '') {
+  // A short review reminder for packaged meat snacks, not a food safety date.
+  if (meatSnack(name) && store !== 'Freezer') return inDays(7);
+  return inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
+}
 const CAT_TINT = { 'Fruits': '#fbe3de', 'Vegetables': '#e4f3e0', 'Meat & Seafood': '#fbe3de', 'Dairy & Eggs': '#e6eef9', 'Grains & Bread': '#f7ecd6', 'Snacks': '#f4e6f3', 'Sauces & Condiments': '#fae9d9', 'Spices & Baking': '#f7ecd6', 'Prepared Meals': '#e9e3f7', 'Drinks': '#e0f2f4', 'Other': '#eceee9' };
 const EMOJI = { apple: '🍎', banana: '🍌', strawberr: '🍓', broccoli: '🥦', lettuce: '🥬', garlic: '🧄', onion: '🧅', carrot: '🥕', tomato: '🍅', potato: '🥔', avocado: '🥑', lemon: '🍋', grape: '🍇', chicken: '🍗', beef: '🥩', steak: '🥩', salmon: '🐟', fish: '🐟', shrimp: '🍤', bacon: '🥓', milk: '🥛', egg: '🥚', cheese: '🧀', cheddar: '🧀', parmesan: '🧀', yogurt: '🍶', butter: '🧈', bread: '🍞', bagel: '🥯', tortilla: '🫓', rice: '🍚', spaghetti: '🍝', pasta: '🍝', flour: '🌾', cereal: '🥣', granola: '🥣', chip: '🍿', cookie: '🍪', cracker: '🍘', juice: '🧃', soda: '🥤', coffee: '☕', water: '💧', pea: '🫛', 'ice cream': '🍨', pizza: '🍕', waffle: '🧇', soy: '🥢', salsa: '🌶️', sauce: '🥫', soup: '🥫', peanut: '🥜', honey: '🍯', cream: '🥛', corn: '🌽' };
-function guessEmoji(name) { const n = name.toLowerCase(); for (const k in EMOJI) if (n.includes(k)) return EMOJI[k]; return null; }
+function guessEmoji(name) {
+  const n = name.toLowerCase();
+  if (meatSnack(n)) return '🥓';
+  const phrases = [
+    [/\b(?:ice cream|ice creams)\b/, '🍨'],
+    [/\b(?:pineapples?)\b/, '🍍'],
+    [/\b(?:peaches|peach)\b/, '🍑'],
+    [/\b(?:pears?)\b/, '🍐'],
+    [/\b(?:strawberries|strawberry)\b/, '🍓'],
+    [/\b(?:blueberries|blueberry)\b/, '🫐'],
+    [/\b(?:oranges?|orange) juice\b/, '🧃'],
+    [/\b(?:peanut butter)\b/, '🥜'],
+    [/\b(?:popcorn)\b/, '🍿']
+  ];
+  for (const [pattern, emoji] of phrases) if (pattern.test(n)) return emoji;
+  const words = n.match(/[a-z]+/g) || [];
+  for (const word of words.reverse()) {
+    for (const key of [word, word.replace(/s$/, ''), word.replace(/es$/, '')]) {
+      if (Object.hasOwn(EMOJI, key)) return EMOJI[key];
+    }
+  }
+  return null;
+}
 const imgHtml = (it, cls = 'img') => it.emoji
   ? `<span class="${cls}" style="background:${CAT_TINT[it.cat] || 'var(--surface-3)'}" aria-hidden="true">${it.emoji}</span>`
   : `<span class="${cls} default" aria-hidden="true">${ic('box')}</span>`;
@@ -1080,12 +1112,15 @@ async function persistPantryDiff(before, after) {
 async function applyPantryTransition(before, after) {
   if (!sb) { S.inv = after; return true; }
   const oldItems = JSON.parse(JSON.stringify(before));
+  const generation = accountGeneration;
   try {
     await persistPantryDiff(oldItems, after);
+    if (generation !== accountGeneration) return false;
     S.inv = after;
     sync = 'synced';
     return true;
   } catch (error) {
+    if (generation !== accountGeneration) return false;
     S.inv = oldItems;
     sync = 'error';
     console.error('[MyPantry] pantry change failed', error);
@@ -1405,11 +1440,33 @@ function chatTextFromHtml(html) {
   template.innerHTML = html;
   return template.content.textContent.replace(/\s+/g, ' ').trim();
 }
+function pantryRemovalTarget(text) {
+  const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(.+?)(?:\s+from\s+(?:my|the)\s+(?:pantry|inventory|ingredients))?[.!]?$/i);
+  return match ? match[1].replace(/^the\s+/i, '').trim() : null;
+}
+function proposeChatRemoval(target) {
+  const items = S.inv.filter(i => i.name.trim().toLowerCase() === target.toLowerCase());
+  if (!items.length) {
+    pushMsg('bot', '<p>I couldn’t find an exact match. Use the full item name shown in Ingredients.</p>');
+    return;
+  }
+  if (items.length > 1) {
+    pushMsg('bot', '<p>There’s more than one item with that name. Open Ingredients to choose the right entry.</p>');
+    return;
+  }
+  const item = items[0];
+  openSheet(`<div class="sheet-head"><h2>Remove pantry item?</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body"><p>Remove ${esc(item.name)} (${esc(qtyText(item.qty, item.unit))}) from your ${esc(item.store.toLowerCase())}?</p></div>
+    <div class="sheet-foot"><button class="btn btn-danger" data-act="chatRemoveConfirm" data-arg="${esc(item.id)}">Remove item</button>
+      <button class="btn btn-ghost" data-act="closeSheet">Cancel</button></div>`);
+}
 async function ask(text) {
   text = text.trim();
   if (!text || chatRequest) return;
   if (text.length > 2000) { toast('Keep messages under 2,000 characters.'); return; }
   pushMsg('user', `<p>${esc(text)}</p>`);
+  const removal = pantryRemovalTarget(text);
+  if (removal) { proposeChatRemoval(removal); return; }
   const generation = accountGeneration;
   const controller = new AbortController(); chatRequest = controller;
   const typing = document.createElement('div'); typing.className = 'msg bot typing';
@@ -1774,8 +1831,11 @@ function renderSoon() {
   const wk = list.length - bad - now;
   if (!list.length) return `<div class="empty"><div class="big-illus">✅</div><h2>Nothing is going bad this week</h2><p>We'll move food here 7 days before it spoils.</p></div>`;
   return `<div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Spoiled</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
-    <p class="soon-note">Sorted by spoil date. Use the food at the top first.</p>
-    <div class="list" style="margin-top:8px">${list.map(itemRow).join('')}</div>
+    <p class="soon-note">Grouped by food category, then sorted by date. Check package dates and storage instructions.</p>
+    ${CATS.filter(c => list.some(i => i.cat === c)).map(c => {
+      const items = list.filter(i => i.cat === c);
+      return `<section class="cat"><div class="cat-h"><h2>${c}</h2><span>${plural(items.length, 'item')}</span></div><div class="list">${items.map(itemRow).join('')}</div></section>`;
+    }).join('')}
     <div style="padding:14px 18px 0"><button class="btn btn-soft" data-act="askFromSoon">${ic('spark')} Find recipes that use these</button></div>`;
 }
 
@@ -1812,7 +1872,7 @@ function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
   const title = mode === 'new' ? 'Enter item details' : mode === 'review' && S.scan?.mode === 'barcode' ? 'Does this look right?' : mode === 'review' ? 'Edit detected item' : 'Edit item';
-  const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Change it if it looks wrong.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
+  const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Follow the package label and storage directions; this estimate is only a reminder.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
   const lookupNote = mode === 'review' && it.lookupSource
     ? `<div class="est-note">${ic('tag')}<span>Product information from ${esc(it.lookupSource)}. Check every field before saving.</span></div>` : '';
   const existingNote = mode === 'review' && S.scan?.mode === 'barcode'
@@ -1903,7 +1963,7 @@ function readItemForm() {
     $('#f_expErr').hidden = false; $('#f_exp').classList.add('bad'); $('#f_exp').focus();
     return null;
   }
-  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
+  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store, name), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
 }
 
 /* ===========================================================
@@ -2279,7 +2339,7 @@ function photoItem(r) {
   const label = typeof r.label_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.label_date) && store !== 'Freezer' ? r.label_date : null;
   return { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat,
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
-    exp: label || estimate(cat, store), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
+    exp: label || estimate(cat, store, name), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
 }
 
 let receiptEditorImage = null;
@@ -2690,7 +2750,7 @@ async function lookupBarcode(rawBarcode, sc) {
       throw new Error('The product database returned this bar code without a usable product name. Nothing was added.');
     }
     const detected = { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
-      src: 'ai', exp: estimate(cat, store), on: true, barcode, lookupSource };
+      src: 'ai', exp: estimate(cat, store, name), on: true, barcode, lookupSource };
     sc.items = [detected]; sc.stage = 'review'; render();
     openItemForm({ ...detected, id: detected.tid }, 'review');
   } catch (error) {
@@ -2701,7 +2761,7 @@ function buildDetected(mode) {
   return DETECT[mode].map(d => ({
     tid: 't' + (uid++), name: d.name, brand: d.brand || '', productName: d.productName || '', emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
     pkg: d.qty || null, store: d.store, src: d.src,
-    exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store), on: true
+    exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store, d.name), on: true
   }));
 }
 function renderReview() {
@@ -2728,7 +2788,7 @@ function reviewCard(i) {
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${unitWord(v, u)}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
-      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : i.barcode ? 'Estimated from category' : 'AI estimate'}</span></div>
+      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : 'Estimated reminder'}</span></div>
     </div>
     <div class="rv-bottom"><span class="hint">Stored in</span><div class="store-sel">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button class="${s === i.store ? 'on' : ''}" data-act="reviewStore" data-arg="${i.tid}|${s}">${s}</button>`).join('')}</div></div>
     ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Check whether these are new packages or ones you've already counted.</span></div>` : ''}` : ''}
@@ -3310,6 +3370,21 @@ const ACT = {
   chatCancel(_, b) { b.closest('.actions').remove(); pushMsg('bot', '<p>No problem. Your food is still there.</p>'); },
   madeDirect(id, b) { b.closest('.actions').remove(); ask(`I made ${R(id).name}`); },
   async undoUse(_, b) { if (S.undo && await restorePantrySnapshot(S.undo)) { b.closest('.actions')?.remove(); pushMsg('bot', '<p>Undone. Your pantry is back the way it was.</p>'); refreshBadge(); } },
+  async chatRemoveConfirm(id, button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    const generation = accountGeneration;
+    const item = S.inv.find(i => i.id === id);
+    if (!item) { closeSheet(); return; }
+    const before = JSON.parse(snapshot());
+    try {
+      if (!await applyPantryTransition(before, before.filter(i => i.id !== id))) return;
+      if (generation !== accountGeneration) return;
+      closeSheet();
+      pushMsg('bot', `<p>Removed ${esc(item.name)} from your pantry.</p>`);
+      refreshBadge();
+    } finally { button.disabled = false; }
+  },
   async removeItem(id, b) {
     const it = S.inv.find(i => i.id === id); if (!it) return;
     const before = JSON.parse(snapshot()), after = before.filter(i => i.id !== id);
@@ -3433,7 +3508,7 @@ const ACT = {
     } else if (mode === 'review') {
       const r = S.scan.items.find(x => x.tid === id);
       Object.assign(r, data, { emoji: r.emoji || data.emoji, src: $('#f_exp').value && $('#f_exp').value !== r.exp ? 'label' : r.src });
-      if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store);
+      if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store, r.name);
       if (S.scan.mode === 'barcode') {
         if (!await saveNewItems([r], 'barcode')) return;
         closeSheet();
@@ -3506,8 +3581,8 @@ const ACT = {
   reviewEdit(tid) { const it = S.scan.items.find(x => x.tid === tid); openItemForm({ ...it, id: tid }, 'review'); },
   reviewStore(arg) {
     const [tid, s] = arg.split('|'); const it = S.scan.items.find(x => x.tid === tid);
-    it.store = s; if (it.src === 'ai') it.exp = estimate(it.cat, s);
-    else if (s === 'Freezer') { it.exp = estimate(it.cat, s); it.src = 'ai'; }
+    it.store = s; if (it.src === 'ai') it.exp = estimate(it.cat, s, it.name);
+    else if (s === 'Freezer') { it.exp = estimate(it.cat, s, it.name); it.src = 'ai'; }
     render();
   },
   async confirmScan() {
