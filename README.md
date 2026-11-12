@@ -10,16 +10,24 @@ The app also includes an AI chat assistant that can answer food-related question
 
 Here is our demo: https://jarod049.github.io/MyPantry/
 
-### Key Features
-- Track food stored in the fridge and pantry
-- Track expiration dates and identify food that should be used soon
-- Get recipe suggestions based on food already available
-- Plan a shopping trip around ingredients missing from recipes and open preferred-store offers
-- Ask an AI assistant questions about food, cooking, and recipes
-- Browse food reels for meal and recipe inspiration
-- Track recipes made from Reels and Pantry Pal on the Ingredients tab
-- See food added by month and the all-time count since tracking began
-  
+### Behavioral requirements
+
+| Requirement | Status | Where to find it |
+| --- | --- | --- |
+| Add and manage food in the pantry, fridge, and freezer | Complete | Ingredients and Scan: manual entry, receipt photos, pantry photos, and UPC/EAN barcodes |
+| Search food and see what needs attention soon | Complete | Ingredients → Going bad soon groups items by food category and sorts by date within each group |
+| Review dates and icons before saving scanned food | Complete | Scan review shows food icons and label dates when available; estimated dates are planning reminders |
+| Ask cooking questions and get pantry-aware recipe ideas | Complete | Pantry Pal on Home |
+| Remove food through chat only when requested | Complete | Ask “Remove Apples from my pantry” and confirm the exact match |
+| Find, save, and like recipes | Complete | Reels shows makeable recipes first and lets users opt in to recipes needing more ingredients |
+| Track recipes made and food thrown away | Complete | Ingredients shows recipe-use and food-waste history |
+| Track food added by month and all time | Complete | Ingredients shows monthly additions and an all-time count since tracking began |
+| Plan grocery shopping without entering a ZIP code | Complete | Settings → Shopping → Shop ideas links to the preferred retailer’s offers |
+| Manage account details and preferences | Complete | Settings supports username, email, password, profile photo, allergies, and other preferences |
+| Measure the 80% weekly usage OKR | Complete | Run the [weekly session report](supabase/reports/weekly-active-users.sql) in the Supabase SQL Editor |
+| Use the app on phones, tablets, and desktop | Complete | The layout adapts to screen size |
+| Verify a Lighthouse accessibility score of at least 90 | Not complete | The score has not been verified |
+
 ## 2. ERD
 <img width="1427" height="779" alt="Screenshot 2026-10-07 at 11 55 41 AM" src="https://github.com/user-attachments/assets/039444b7-bdcb-46a0-8949-6543cb8199ea" />
 
@@ -53,7 +61,7 @@ Connected mode uses Supabase Auth for sign-in, signup, email confirmation, passw
 
 Navigation and unfinished scans remain browser-local. Demo data stays separate from real accounts.
 
-Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, ZIP code, and assistant conversations to Supabase. Apply the account-state migrations and `supabase/migrations/20261101_pantry_delete.sql` before deploying this frontend. The delete migration is required by inventory reset and Demo pantry tools. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
+Authenticated accounts now sync pantry changes, saved/liked/watched recipes, recipe preferences, units, spoil reminders, preferred store, and assistant conversations to Supabase. Apply the account-state migrations and `supabase/migrations/20261101_pantry_delete.sql` before deploying this frontend. The delete migration is required for pantry item removal, inventory reset, and Demo pantry tools. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the rollout details.
 
 Profile photos use the private Supabase Storage bucket and owner-only policies created by `supabase/migrations/20261105_profile_avatars.sql`. Apply that migration before deploying the profile-photo UI. Users can open their profile row in Settings, take a front-camera photo or choose an image, replace it, and remove it.
 
@@ -61,7 +69,7 @@ Food allergy preferences are stored in the existing per-account `recipe_preferen
 
 ## 6. Deploy
 
-The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. It uploads the HTML, CSS, app.js, auth.js, and generated config.js. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
+The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. The workflow runs the same build as local development, publishes the generated `dist/` folder, and versions asset URLs so browsers can load changed files. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
 
 ## 7. Verify
 
@@ -72,18 +80,30 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Test the password-reset email and save a new password.
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
 
-Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed lists recipes you can make now, then ones missing one or two ingredients, then the rest, loading 8 at a time.
+Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed shows recipes you can make now. Select **Show recipes that need more ingredients** to see additional recipes with their missing ingredients.
 
 The Ingredients tab shows how many recipes the account made this month, split between Reels and Pantry Pal, plus a dated history. Confirming “I used this recipe” in Reels updates the pantry and records a use together; viewing, saving, or liking a reel does not count. For a recipe suggested in free-form Pantry Pal chat, users explicitly log its name with “Log a recipe I made.” That log does not automatically deduct ingredients from the pantry. Each use is a separate owner-scoped record in `recipe_use_events`, so making the same recipe twice counts twice. Apply `supabase/migrations/20261110_recipe_use_tracking.sql` before deploying this frontend; see [SUPABASE_SYNC.md](SUPABASE_SYNC.md).
 
 The Food added card on Ingredients counts each confirmed manual, barcode, receipt, or pantry-photo addition as one item. Its history shows the quantity and unit for each addition, with month navigation and an all-time count since tracking began. Adding the same food again counts as another item. Inventory edits, Undo restores, and Demo seed items do not count. Removing food or resetting inventory does not remove this history. Existing pantry rows are not backfilled because their original addition dates are unknown. Apply `supabase/migrations/20261111_food_added_tracking.sql` before deploying this frontend.
 
-Settings → Shopping → Shop ideas uses the signed-in account's preferred store, ZIP, pantry, and saved recipes. It shows ingredient ideas for recipes, checks whether a matching pantry item is already listed, and flags items whose listed dates need review. It does not calculate exact purchase quantities or determine food safety. The store button opens that retailer's official offers page; the user chooses a local store and checks current prices and availability there. MyPantry does not currently ingest live retailer prices, promotions, or stock, and no new database migration is needed for these suggestions.
+Settings → Shopping → Shop ideas uses the signed-in account's preferred store, pantry, and saved recipes. It shows ingredient ideas for recipes, checks whether a matching pantry item is already listed, and flags items whose listed dates need review. It does not calculate exact purchase quantities or determine food safety. The store button opens that retailer's official offers page; the user chooses a local store and checks current prices and availability there. MyPantry does not currently ingest live retailer prices, promotions, or stock, and no new database migration is needed for these suggestions.
 
-Receipt photos are read by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
+Receipt and pantry photos are processed by the `receipt-scan` Edge Function; see [RECEIPT_SCAN_SETUP.md](RECEIPT_SCAN_SETUP.md).
 
 Camera scan screens use a live rear-camera preview when `getUserMedia` is available over HTTPS or localhost. The shutter captures one still frame for analysis; gallery upload and file capture remain available when live preview is unsupported or permission is denied.
 
 UPC/EAN food bar codes are decoded in the browser and looked up through the authenticated `barcode-lookup` Edge Function using USDA FoodData Central first and Open Food Facts as a fallback. Results open in the existing editable item form, and spoil dates use the current category and storage estimates. See [BARCODE_SETUP.md](BARCODE_SETUP.md).
 
 Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.
+
+### Sprint 3 pantry behavior and reporting
+
+| Requirement | Implementation |
+| --- | --- |
+| Track progress toward 80% weekly use | [Weekly session report](supabase/reports/weekly-active-users.sql), run in the Supabase SQL editor by a project admin. The report counts distinct users with a recorded session start in the last completed Mountain Time week, among confirmed accounts that already existed when the week began. It does not count a session that started before the week. |
+| Classify meat snacks separately from raw meat | Recognized meat sticks and jerky receive a planning reminder when no package date is available. Follow the package label and storage directions. |
+| Show recognizable icons for scanned food | Match full food names and common plurals; use the neutral icon when there is no reliable match. |
+| Group Going bad soon by category | Keep the existing search and filters, and sort items by date within their food categories. |
+| Remove an ingredient from chat only when asked | Type an explicit command such as “Remove Apples from my pantry.” A unique exact match opens a confirmation. Ambiguous names direct the user to Ingredients. |
+
+To see OKR #3, open **Supabase → SQL Editor → New query**, paste the linked report, and select **Run**. Read `active_percent` and `meets_80_percent`. This measures app opens through session starts; it does not measure feature usage.

@@ -61,6 +61,10 @@ const pad2 = n => String(n).padStart(2, '0');
 const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const inDays = n => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return isoOf(d); };
 const parseIso = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const todayIso = () => isoOf(new Date());
+// A typed spoil date may not be in the past. An existing item's unchanged date is
+// still allowed, so food that already passed its date can be edited or logged.
+const pastSpoilDate = (value, original = '') => !!value && value < todayIso() && value !== original;
 const daysLeft = it => Math.round((parseIso(it.exp) - TODAY) / DAY);
 const fmtDate = s => parseIso(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -114,6 +118,7 @@ function qtyText(q, u) { const [v, uu] = disp(q, u); return `${v} ${unitWord(v, 
 const CATS = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dairy & Eggs', 'Grains & Bread', 'Snacks', 'Sauces & Condiments', 'Spices & Baking', 'Prepared Meals', 'Drinks', 'Other'];
 function foodCategory(name) {
   const text = name.toLowerCase();
+  if (meatSnack(text)) return 'Snacks';
   if (/\bflour tortillas?\b/.test(text)) return 'Grains & Bread';
   if (/\b(beverages?|drinks?|juice|soda|water|coffee|tea|punch|lemonade)\b/.test(text)) return 'Drinks';
   if (/\b(candy|candies|chocolates?|cookies?|crackers?|chips?|popcorn|pretzels?|granola)\b/.test(text)) return 'Snacks';
@@ -130,6 +135,7 @@ function foodCategory(name) {
   return 'Other';
 }
 function normalizeCategory(name, category) {
+  if (meatSnack(name) && (!CATS.includes(category) || category === 'Meat & Seafood')) return 'Snacks';
   if (category === 'Dairy') return 'Dairy & Eggs';
   if (CATS.includes(category)) return category;
   return foodCategory(name);
@@ -147,10 +153,40 @@ const SHELF = {
   'Drinks': { Fridge: 10, Pantry: 180, Freezer: 180 },
   'Other': { Fridge: 60, Pantry: 180, Freezer: 180 }
 };
-const estimate = (cat, store) => inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
+function meatSnack(name) {
+  return !/\b(?:raw|uncooked|fresh)\b/i.test(name) &&
+    /\b(?:jerky|(?:meat|beef|turkey|pork|chicken|snack) sticks?)\b/i.test(name);
+}
+function estimate(cat, store, name = '') {
+  // A short review reminder for packaged meat snacks, not a food safety date.
+  if (meatSnack(name) && store !== 'Freezer') return inDays(7);
+  return inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
+}
 const CAT_TINT = { 'Fruits': '#fbe3de', 'Vegetables': '#e4f3e0', 'Meat & Seafood': '#fbe3de', 'Dairy & Eggs': '#e6eef9', 'Grains & Bread': '#f7ecd6', 'Snacks': '#f4e6f3', 'Sauces & Condiments': '#fae9d9', 'Spices & Baking': '#f7ecd6', 'Prepared Meals': '#e9e3f7', 'Drinks': '#e0f2f4', 'Other': '#eceee9' };
 const EMOJI = { apple: '🍎', banana: '🍌', strawberr: '🍓', broccoli: '🥦', lettuce: '🥬', garlic: '🧄', onion: '🧅', carrot: '🥕', tomato: '🍅', potato: '🥔', avocado: '🥑', lemon: '🍋', grape: '🍇', chicken: '🍗', beef: '🥩', steak: '🥩', salmon: '🐟', fish: '🐟', shrimp: '🍤', bacon: '🥓', milk: '🥛', egg: '🥚', cheese: '🧀', cheddar: '🧀', parmesan: '🧀', yogurt: '🍶', butter: '🧈', bread: '🍞', bagel: '🥯', tortilla: '🫓', rice: '🍚', spaghetti: '🍝', pasta: '🍝', flour: '🌾', cereal: '🥣', granola: '🥣', chip: '🍿', cookie: '🍪', cracker: '🍘', juice: '🧃', soda: '🥤', coffee: '☕', water: '💧', pea: '🫛', 'ice cream': '🍨', pizza: '🍕', waffle: '🧇', soy: '🥢', salsa: '🌶️', sauce: '🥫', soup: '🥫', peanut: '🥜', honey: '🍯', cream: '🥛', corn: '🌽' };
-function guessEmoji(name) { const n = name.toLowerCase(); for (const k in EMOJI) if (n.includes(k)) return EMOJI[k]; return null; }
+function guessEmoji(name) {
+  const n = name.toLowerCase();
+  if (meatSnack(n)) return '🥓';
+  const phrases = [
+    [/\b(?:ice cream|ice creams)\b/, '🍨'],
+    [/\b(?:pineapples?)\b/, '🍍'],
+    [/\b(?:peaches|peach)\b/, '🍑'],
+    [/\b(?:pears?)\b/, '🍐'],
+    [/\b(?:strawberries|strawberry)\b/, '🍓'],
+    [/\b(?:blueberries|blueberry)\b/, '🫐'],
+    [/\b(?:oranges?|orange) juice\b/, '🧃'],
+    [/\b(?:peanut butter)\b/, '🥜'],
+    [/\b(?:popcorn)\b/, '🍿']
+  ];
+  for (const [pattern, emoji] of phrases) if (pattern.test(n)) return emoji;
+  const words = n.match(/[a-z]+/g) || [];
+  for (const word of words.reverse()) {
+    for (const key of [word, word.replace(/s$/, ''), word.replace(/es$/, '')]) {
+      if (Object.hasOwn(EMOJI, key)) return EMOJI[key];
+    }
+  }
+  return null;
+}
 const imgHtml = (it, cls = 'img') => it.emoji
   ? `<span class="${cls}" style="background:${CAT_TINT[it.cat] || 'var(--surface-3)'}" aria-hidden="true">${it.emoji}</span>`
   : `<span class="${cls} default" aria-hidden="true">${ic('box')}</span>`;
@@ -195,48 +231,48 @@ function samplePantry() {
 /* ---------- Recipes ---------- */
 // Launch recipes. The large Reels catalog lives in recipes.js and in the Supabase `recipe` table.
 const BASE_RECIPES = [
-  { id: 'stirfry', name: 'Chicken & Broccoli Stir-Fry', emoji: '🥡', type: 'Chinese', main: 'chicken', time: 25, serves: 6, likes: 1240,
+  { id: 'stirfry', name: 'Chicken & Broccoli Stir-Fry', emoji: '🥡', type: 'Chinese', main: 'chicken', time: 25, serves: 6,
     bg: 'radial-gradient(circle at 50% 35%, #e0613f, #8c2413 55%, #2b0b05)', kw: ['stir fry', 'stir-fry', 'stirfry', 'broccoli'],
     ing: [{ m: 'chicken breast', a: 1, label: '1 lb chicken breast' }, { m: 'broccoli', a: 1, label: '1 head broccoli' }, { m: 'garlic', a: .25, label: '3 cloves garlic' }, { m: 'soy sauce', a: 2, label: '1/4 cup soy sauce' }, { m: 'white rice', a: .5, label: '1 1/2 cups rice' }],
     steps: ['Start the rice', 'Slice chicken into strips', 'Sear chicken in a hot pan, 5 min', 'Add broccoli and garlic', 'Pour in soy sauce and toss', 'Serve over rice'] },
-  { id: 'friedrice', name: 'Egg Fried Rice', emoji: '🍚', type: 'Chinese', main: 'eggs', time: 15, serves: 4, likes: 3120,
+  { id: 'friedrice', name: 'Egg Fried Rice', emoji: '🍚', type: 'Chinese', main: 'eggs', time: 15, serves: 4,
     bg: 'radial-gradient(circle at 50% 35%, #f0b429, #9a5a07 55%, #2c1502)', kw: ['fried rice', 'egg fried'],
     ing: [{ m: 'white rice', a: .5, label: '3 cups cooked rice' }, { m: 'eggs', a: 3, label: '3 eggs' }, { m: 'frozen peas', a: 4, label: '1 cup frozen peas' }, { m: 'soy sauce', a: 1, label: '2 tbsp soy sauce' }, { m: 'onion', a: 1, label: '1 onion' }],
     steps: ['Dice the onion', 'Scramble the eggs, set aside', 'Fry onion and peas, 3 min', 'Add rice and press flat to crisp', 'Stir in eggs and soy sauce'] },
-  { id: 'pancakes', name: 'Banana Pancakes', emoji: '🥞', type: 'Breakfast', main: 'bananas', time: 20, serves: 6, likes: 5480,
+  { id: 'pancakes', name: 'Banana Pancakes', emoji: '🥞', type: 'Breakfast', main: 'bananas', time: 20, serves: 6,
     bg: 'radial-gradient(circle at 50% 35%, #f6c453, #b8651b 55%, #3a1d06)', kw: ['pancake'],
     ing: [{ m: 'bananas', a: 2, label: '2 ripe bananas' }, { m: 'eggs', a: 2, label: '2 eggs' }, { m: 'all-purpose flour', a: .4, label: '1 1/2 cups flour' }, { m: 'milk', a: .09, label: '1 1/2 cups milk' }, { m: 'butter', a: .06, label: '2 tbsp butter' }],
     steps: ['Mash the bananas', 'Whisk in eggs and milk', 'Fold in the flour', 'Cook on a buttered pan', 'Flip when bubbles form'] },
-  { id: 'quesadilla', name: 'Chicken Quesadillas', emoji: '🫓', type: 'Mexican', main: 'chicken', time: 15, serves: 4, likes: 980,
+  { id: 'quesadilla', name: 'Chicken Quesadillas', emoji: '🫓', type: 'Mexican', main: 'chicken', time: 15, serves: 4,
     bg: 'radial-gradient(circle at 50% 35%, #e98a2c, #8a3312 55%, #2a0e05)', kw: ['quesadilla'],
     ing: [{ m: 'flour tortillas', a: 4, label: '4 tortillas' }, { m: 'chicken breast', a: .5, label: '1/2 lb chicken' }, { m: 'cheddar', a: 4, label: '1 cup cheddar' }, { m: 'salsa', a: 4, label: '1/2 cup salsa' }],
     steps: ['Cook and shred the chicken', 'Fill tortillas with cheese and chicken', 'Toast 2 min per side', 'Slice and serve with salsa'] },
-  { id: 'tacos', name: 'Weeknight Beef Tacos', emoji: '🌮', type: 'Mexican', main: 'beef', time: 20, serves: 6, likes: 2210,
+  { id: 'tacos', name: 'Weeknight Beef Tacos', emoji: '🌮', type: 'Mexican', main: 'beef', time: 20, serves: 6,
     bg: 'radial-gradient(circle at 50% 35%, #3fae62, #175c30 55%, #07210f)', kw: ['taco'],
     ing: [{ m: 'ground beef', a: 1, label: '1 lb ground beef' }, { m: 'flour tortillas', a: 6, label: '6 tortillas' }, { m: 'cheddar', a: 3, label: '3/4 cup cheddar' }, { m: 'lettuce', a: .5, label: '1/2 head lettuce' }, { m: 'salsa', a: 4, label: '1/2 cup salsa' }],
     steps: ['Brown the beef, 8 min', 'Warm the tortillas', 'Shred the lettuce', 'Fill and top with cheese and salsa'] },
-  { id: 'bolognese', name: 'Easy Spaghetti Bolognese', emoji: '🍝', type: 'Italian', main: 'beef', time: 30, serves: 6, likes: 1760,
+  { id: 'bolognese', name: 'Easy Spaghetti Bolognese', emoji: '🍝', type: 'Italian', main: 'beef', time: 30, serves: 6,
     bg: 'radial-gradient(circle at 50% 35%, #d6402b, #6b1d0e 55%, #1f0904)', kw: ['spaghetti', 'bolognese'],
     ing: [{ m: 'spaghetti', a: 1, label: '1 lb spaghetti' }, { m: 'ground beef', a: 1, label: '1 lb ground beef' }, { m: 'pasta sauce', a: 24, label: '1 jar pasta sauce' }, { m: 'onion', a: 1, label: '1 onion' }, { m: 'parmesan', a: 1, label: '1/4 cup parmesan' }],
     steps: ['Boil the spaghetti', 'Brown beef with onion', 'Add pasta sauce, simmer 10 min', 'Toss with the pasta', 'Top with parmesan'] },
-  { id: 'parfait', name: 'Strawberry Yogurt Parfait', emoji: '🍓', type: 'Breakfast', main: 'strawberries', time: 5, serves: 2, likes: 860,
+  { id: 'parfait', name: 'Strawberry Yogurt Parfait', emoji: '🍓', type: 'Breakfast', main: 'strawberries', time: 5, serves: 2,
     bg: 'radial-gradient(circle at 50% 35%, #ee6aa7, #9d174d 55%, #33061a)', kw: ['parfait'],
     ing: [{ m: 'greek yogurt', a: 8, label: '1 cup Greek yogurt' }, { m: 'strawberries', a: .5, label: '1/2 lb strawberries' }, { m: 'granola', a: 3, label: '3/4 cup granola' }],
     steps: ['Slice the strawberries', 'Spoon yogurt into a glass', 'Add berries and granola', 'Repeat the layers'] },
-  { id: 'grilledcheese', name: 'Grilled Cheese & Tomato Soup', emoji: '🥪', type: 'American', main: 'cheese', time: 15, serves: 4, likes: 4020,
+  { id: 'grilledcheese', name: 'Grilled Cheese & Tomato Soup', emoji: '🥪', type: 'American', main: 'cheese', time: 15, serves: 4,
     bg: 'radial-gradient(circle at 50% 35%, #f07f3c, #8a3312 55%, #2a0e05)', kw: ['grilled cheese', 'tomato soup'],
     ing: [{ m: 'bread', a: .5, label: '8 slices bread' }, { m: 'cheddar', a: 3, label: '4 slices cheddar' }, { m: 'butter', a: .06, label: '2 tbsp butter' }, { m: 'tomato soup', a: 1, label: '1 can tomato soup' }],
     steps: ['Heat the soup', 'Butter the bread', 'Add cheddar, grill 3 min per side', 'Slice and dunk'] },
-  { id: 'alfredo', name: 'Chicken Alfredo', emoji: '🍝', type: 'Italian', main: 'chicken', time: 25, serves: 6, likes: 2890,
+  { id: 'alfredo', name: 'Chicken Alfredo', emoji: '🍝', type: 'Italian', main: 'chicken', time: 25, serves: 6,
     bg: 'radial-gradient(circle at 50% 35%, #e9d8a6, #9a7b3a 55%, #2e2310)', kw: ['alfredo'],
     ing: [{ m: 'spaghetti', a: 1, label: '1 lb pasta' }, { m: 'chicken breast', a: .75, label: '3/4 lb chicken' }, { m: 'heavy cream', a: 16, label: '2 cups heavy cream' }, { m: 'parmesan', a: 2, label: '1/2 cup parmesan' }, { m: 'garlic', a: .25, label: '3 cloves garlic' }],
     subs: { 'heavy cream': { use: ['milk', 'butter'], text: 'Swap the heavy cream for 1 1/2 cups milk warmed with 3 tbsp butter. It comes out a little lighter.' } },
     steps: ['Boil the pasta', 'Cook the chicken', 'Warm cream with garlic', 'Stir in parmesan', 'Toss everything together'] },
-  { id: 'teriyaki', name: 'Salmon Teriyaki Bowl', emoji: '🍣', type: 'Japanese', main: 'salmon', time: 20, serves: 4, likes: 1500,
+  { id: 'teriyaki', name: 'Salmon Teriyaki Bowl', emoji: '🍣', type: 'Japanese', main: 'salmon', time: 20, serves: 4,
     bg: 'radial-gradient(circle at 50% 35%, #f08a6c, #7a2a1c 55%, #220b06)', kw: ['teriyaki', 'salmon'],
     ing: [{ m: 'salmon', a: 1, label: '1 lb salmon' }, { m: 'white rice', a: .5, label: '1 1/2 cups rice' }, { m: 'soy sauce', a: 2, label: '1/4 cup soy sauce' }, { m: 'broccoli', a: 1, label: '1 head broccoli' }],
     steps: ['Cook the rice', 'Glaze and bake the salmon', 'Steam the broccoli', 'Build the bowls'] },
-  { id: 'caesar', name: 'Chicken Caesar Wraps', emoji: '🌯', type: 'American', main: 'chicken', time: 15, serves: 4, likes: 700,
+  { id: 'caesar', name: 'Chicken Caesar Wraps', emoji: '🌯', type: 'American', main: 'chicken', time: 15, serves: 4,
     bg: 'radial-gradient(circle at 50% 35%, #9bc46b, #3f6420 55%, #122008)', kw: ['caesar', 'wrap'],
     ing: [{ m: 'chicken breast', a: .75, label: '3/4 lb chicken' }, { m: 'flour tortillas', a: 4, label: '4 tortillas' }, { m: 'lettuce', a: 1, label: '1 head romaine' }, { m: 'parmesan', a: 1, label: '1/4 cup parmesan' }, { m: 'caesar dressing', a: 4, label: '1/2 cup Caesar dressing' }],
     steps: ['Cook and slice chicken', 'Chop the romaine', 'Toss with dressing and parmesan', 'Wrap it up'] }
@@ -303,8 +339,8 @@ function freshState() {
     auth: 'login', tab: 'home', inv: samplePantry(),
     user: null, signupEmail: '',
     remembered: false, faceId: true, stayIn: false, metric: false, reminders: true,
-    store: "Smith's", zip: '',
-    prefs: {}, liked: new Set(), saved: new Set(), watched: new Set(), conversationId: null,
+    store: "Smith's",
+    prefs: {}, liked: new Set(), likeCounts: {}, saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     recipeUseEvents: [], recipeUseStatus: 'loading',
     foodAddedEvents: [], foodAddedStatus: 'loading', foodAddedMonth: null,
@@ -551,7 +587,7 @@ function persist() {
     } catch (_) {}
   }
   try {
-    localStorage.setItem(key, JSON.stringify({ inv: sb ? undefined : S.inv, saved: [...S.saved], liked: [...S.liked], watched: [...S.watched], prefs: S.prefs, metric: S.metric, reminders: S.reminders, store: S.store, zip: S.zip, uid }));
+    localStorage.setItem(key, JSON.stringify({ inv: sb ? undefined : S.inv, saved: [...S.saved], liked: [...S.liked], watched: [...S.watched], prefs: S.prefs, metric: S.metric, reminders: S.reminders, store: S.store, uid }));
   } catch (_) {}
   if (sb && S.user?.id) queueUserAppStateWrite();
 }
@@ -562,11 +598,33 @@ function rowToRecipe(row) {
     .filter(g => g && g.m && g.label).map(g => ({ m: String(g.m).toLowerCase(), a: Number(g.a) || 1, label: String(g.label) })) : [];
   return {
     id: row.recipe_id, name: row.name, emoji: row.emoji || '🍽️', type: row.cuisine, main: row.main_ingredient,
-    time: row.minutes, serves: row.serves, likes: row.base_likes || 0,
+    time: row.minutes, serves: row.serves,
     bg: row.background || 'radial-gradient(circle at 50% 35%, #e0613f, #8c2413 55%, #2b0b05)',
     kw: row.keywords || [], ing, steps: row.steps || [], ...(row.substitutions ? { subs: row.substitutions } : {}),
     ...(row.video_url ? { video: row.video_url } : {})
   };
+}
+/* Reel like counts are real: the number of other MyPantry accounts that liked each
+   recipe (from the recipe_like_counts RPC), plus 1 when the current user likes it. */
+let likeCountsAt = 0, likeCountsRequest = 0;
+const likeCount = r => (S.likeCounts[r.id] || 0) + (S.liked.has(r.id) ? 1 : 0);
+async function loadLikeCounts(force = false) {
+  if (!sb || !S.user?.id) return;
+  if (!force && Date.now() - likeCountsAt < 30000) return;
+  likeCountsAt = Date.now();
+  const request = ++likeCountsRequest, owner = S.user.id;
+  try {
+    const { data, error } = await sb.rpc('recipe_like_counts');
+    if (error) throw error;
+    if (request !== likeCountsRequest || S.user?.id !== owner) return;
+    const counts = {};
+    for (const row of data || []) if (row?.recipe_id) counts[row.recipe_id] = Math.max(0, Number(row.likes) || 0);
+    S.likeCounts = counts;
+    $$('#reelFeed [data-act="like"]').forEach(b => { const r = R(b.dataset.arg); const n = b.querySelector('.num'); if (r && n) n.textContent = fmtK(likeCount(r)); });
+  } catch (error) {
+    likeCountsAt = 0;
+    console.warn('[MyPantry] recipe like counts unavailable', error);
+  }
 }
 let remoteRecipesLoaded = false;
 async function loadRemoteRecipes() {
@@ -603,7 +661,7 @@ function hydrate() {
     const d = JSON.parse(localStorage.getItem(key) || 'null'); if (!d) return;
     if (Array.isArray(d.inv) && !sb) S.inv = d.inv;
     S.saved = new Set(d.saved || []); S.liked = new Set(d.liked || []); S.watched = new Set(d.watched || []); S.prefs = d.prefs || {};
-    S.metric = !!d.metric; S.reminders = d.reminders !== false; S.store = d.store || S.store; S.zip = d.zip || S.zip; uid = Math.max(uid, d.uid || 0);
+    S.metric = !!d.metric; S.reminders = d.reminders !== false; S.store = d.store || S.store; uid = Math.max(uid, d.uid || 0);
   } catch (_) {}
 }
 function userAppStatePayload(owner = S.user?.id) {
@@ -616,7 +674,7 @@ function userAppStatePayload(owner = S.user?.id) {
     metric: S.metric,
     spoil_reminders: S.reminders,
     preferred_store: S.store || null,
-    zip_code: /^\d{5}$/.test(S.zip || '') ? S.zip : null
+    zip_code: null // ZIP is no longer collected; clear any previously saved value.
   };
 }
 function queueUserAppStateWrite() {
@@ -658,7 +716,6 @@ async function loadUserAppState() {
     S.metric = !!data.metric;
     S.reminders = data.spoil_reminders !== false;
     S.store = data.preferred_store || "Smith's";
-    S.zip = data.zip_code || '';
     render();
     return;
   }
@@ -1083,12 +1140,15 @@ async function persistPantryDiff(before, after) {
 async function applyPantryTransition(before, after) {
   if (!sb) { S.inv = after; return true; }
   const oldItems = JSON.parse(JSON.stringify(before));
+  const generation = accountGeneration;
   try {
     await persistPantryDiff(oldItems, after);
+    if (generation !== accountGeneration) return false;
     S.inv = after;
     sync = 'synced';
     return true;
   } catch (error) {
+    if (generation !== accountGeneration) return false;
     S.inv = oldItems;
     sync = 'error';
     console.error('[MyPantry] pantry change failed', error);
@@ -1313,17 +1373,19 @@ function renderAuth() {
     <button type="button" class="back" data-act="auth" data-arg="login">${ic('left')} Sign in</button>
     <div class="auth-hero" style="padding-top:0"><h1>Create your account</h1><p>It takes a minute. Then snap a photo of your fridge and you're set.</p></div>
     <div class="err" id="suErr" hidden>${ic('alert')}<span></span></div>
-    <div class="field"><label for="su_name">First name</label><input class="input" id="su_name" type="text" autocomplete="given-name" placeholder="Karen"></div>
-    <div class="field"><label for="su_email">Email</label><input class="input" id="su_email" type="email" autocomplete="email" placeholder="you@example.com"><span class="field-err" id="su_emailErr" hidden>Enter a valid email, like name@example.com.</span></div>
-    <div class="field"><label for="su_pw">Password</label><div class="pw-wrap"><input class="input" id="su_pw" aria-describedby="su_pw_hint" type="password" autocomplete="new-password" placeholder="Create a password"><button type="button" data-act="showpw" data-arg="su_pw">Show</button></div><span class="hint" id="su_pw_hint">Use at least 8 characters and one symbol (e.g., ! or #).</span></div>
-    <div class="field"><label for="su_pw2">Confirm password</label><input class="input" id="su_pw2" type="password" autocomplete="new-password" placeholder="Type it again"></div>
+    <div class="field"><label for="su_name">First name</label><input class="input" id="su_name" type="text" autocomplete="given-name" enterkeyhint="next" placeholder="Karen"></div>
+    <div class="field"><label for="su_email">Email</label><input class="input" id="su_email" type="email" autocomplete="email" enterkeyhint="next" placeholder="you@example.com"><span class="field-err" id="su_emailErr" hidden>Enter a valid email, like name@example.com.</span></div>
+    <div class="field"><label for="su_pw">Password</label><div class="pw-wrap"><input class="input" id="su_pw" aria-describedby="su_pw_hint" type="password" autocomplete="new-password" enterkeyhint="next" placeholder="Create a password"><button type="button" data-act="showpw" data-arg="su_pw">Show</button></div><span class="hint" id="su_pw_hint">Use at least 8 characters and one symbol (e.g., ! or #).</span></div>
+    <div class="field"><label for="su_pw2">Confirm password</label><input class="input" id="su_pw2" type="password" autocomplete="new-password" enterkeyhint="go" placeholder="Type it again"></div>
     <ul class="pw-rules" id="pwRules">
       <li data-rule="len">At least 8 characters</li>
       <li data-rule="sym">Includes a symbol, like ! # $ or %</li>
       <li data-rule="match">Both passwords match</li>
     </ul>
-    <button class="btn btn-primary" type="submit" id="suBtn" disabled>Create account</button>
-    <div class="auth-foot">Already have an account? <button type="button" class="link" data-act="auth" data-arg="login">Sign in</button></div>
+    <div class="auth-submit-bar">
+      <button class="btn btn-primary" type="submit" id="suBtn" disabled>Create account</button>
+      <div class="auth-foot">Already have an account? <button type="button" class="link" data-act="auth" data-arg="login">Sign in</button></div>
+    </div>
   </form></div>`;
 
   if (a === 'verify') return `<div class="scroll"><div class="auth">
@@ -1435,11 +1497,33 @@ function chatTextFromHtml(html) {
   template.innerHTML = html;
   return template.content.textContent.replace(/\s+/g, ' ').trim();
 }
+function pantryRemovalTarget(text) {
+  const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(.+?)(?:\s+from\s+(?:my|the)\s+(?:pantry|inventory|ingredients))?[.!]?$/i);
+  return match ? match[1].replace(/^the\s+/i, '').trim() : null;
+}
+function proposeChatRemoval(target) {
+  const items = S.inv.filter(i => i.name.trim().toLowerCase() === target.toLowerCase());
+  if (!items.length) {
+    pushMsg('bot', '<p>I couldn’t find an exact match. Use the full item name shown in Ingredients.</p>');
+    return;
+  }
+  if (items.length > 1) {
+    pushMsg('bot', '<p>There’s more than one item with that name. Open Ingredients to choose the right entry.</p>');
+    return;
+  }
+  const item = items[0];
+  openSheet(`<div class="sheet-head"><h2>Remove pantry item?</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body"><p>Remove ${esc(item.name)} (${esc(qtyText(item.qty, item.unit))}) from your ${esc(item.store.toLowerCase())}?</p></div>
+    <div class="sheet-foot"><button class="btn btn-danger" data-act="chatRemoveConfirm" data-arg="${esc(item.id)}">Remove item</button>
+      <button class="btn btn-ghost" data-act="closeSheet">Cancel</button></div>`);
+}
 async function ask(text) {
   text = text.trim();
   if (!text || chatRequest) return;
   if (text.length > 2000) { toast('Keep messages under 2,000 characters.'); return; }
   pushMsg('user', `<p>${esc(text)}</p>`);
+  const removal = pantryRemovalTarget(text);
+  if (removal) { proposeChatRemoval(removal); return; }
   const generation = accountGeneration;
   const controller = new AbortController(); chatRequest = controller;
   const typing = document.createElement('div'); typing.className = 'msg bot typing';
@@ -1822,12 +1906,10 @@ function renderIng() {
     content = `<div class="empty"><div class="big-illus">🧺</div><h2>Your pantry is empty</h2>
       <p>Log your groceries and we'll keep track of what you have and when it spoils.</p>
       <div class="pointer">Tap Add food to start ${ic('arrowDown')}</div></div>`;
-  } else if (S.ingView === 'soon') {
-    content = renderSoon();
   } else {
     content = `<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${P.search}</svg><input class="input" id="ingSearch" placeholder="Search your food" value="${esc(S.ingQuery)}" aria-label="Search your food"></div>
       <div class="chips cat-chips">${['All', ...CATS].map(c => `<button class="chip ${S.ingCat === c ? 'on' : ''}" data-act="ingCat" data-arg="${c}">${c}</button>`).join('')}</div>
-      <div id="ingList">${ingListHtml()}</div>`;
+      <div id="ingList">${S.ingView === 'soon' ? renderSoon() : ingListHtml()}</div>`;
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
     ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Going bad soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
@@ -1847,10 +1929,19 @@ function itemRow(i) {
     <span class="right">${pillFor(i)}<svg class="edit-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P.pencil}</svg></span>
   </button>`;
 }
+// Search text and category chips apply to both "All items" and "Going bad soon".
+function filteredInv() {
+  const q = S.ingQuery.toLowerCase().trim();
+  return S.inv.filter(i => (S.ingCat === 'All' || i.cat === S.ingCat)
+    && (!q || [i.name, i.brand, i.productName].some(value => String(value || '').toLowerCase().includes(q))));
+}
+function noMatchHtml() {
+  const q = S.ingQuery.toLowerCase().trim();
+  return `<div class="empty"><p>No food matches${q ? ` "${esc(q)}"` : ''}${S.ingCat !== 'All' ? ` in ${S.ingCat}` : ''}.</p></div>`;
+}
 function ingListHtml() {
   const q = S.ingQuery.toLowerCase().trim();
-  const items = S.inv.filter(i => (S.ingCat === 'All' || i.cat === S.ingCat)
-    && (!q || [i.name, i.brand, i.productName].some(value => String(value || '').toLowerCase().includes(q))));
+  const items = filteredInv();
   if (!items.length) return `<div class="empty"><p>No food matches${q ? ` "${esc(q)}"` : ''}${S.ingCat !== 'All' ? ` in ${S.ingCat}` : ''}.</p></div>`;
   return CATS.filter(c => items.some(i => i.cat === c)).map(c => {
     const list = items.filter(i => i.cat === c).sort(byExp);
@@ -1858,14 +1949,19 @@ function ingListHtml() {
   }).join('');
 }
 function renderSoon() {
-  const list = S.inv.filter(i => daysLeft(i) <= 7).sort(byExp);
+  const anySoon = S.inv.some(i => daysLeft(i) <= 7);
+  const list = filteredInv().filter(i => daysLeft(i) <= 7).sort(byExp);
+  if (anySoon && !list.length) return noMatchHtml();
   const bad = list.filter(i => daysLeft(i) < 0).length;
   const now = list.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 2).length;
   const wk = list.length - bad - now;
   if (!list.length) return `<div class="empty"><div class="big-illus">✅</div><h2>Nothing is going bad this week</h2><p>We'll move food here 7 days before it spoils.</p></div>`;
   return `<div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Spoiled</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
-    <p class="soon-note">Sorted by spoil date. Use the food at the top first.</p>
-    <div class="list" style="margin-top:8px">${list.map(itemRow).join('')}</div>
+    <p class="soon-note">Grouped by food category, then sorted by date. Check package dates and storage instructions.</p>
+    ${CATS.filter(c => list.some(i => i.cat === c)).map(c => {
+      const items = list.filter(i => i.cat === c);
+      return `<section class="cat"><div class="cat-h"><h2>${c}</h2><span>${plural(items.length, 'item')}</span></div><div class="list">${items.map(itemRow).join('')}</div></section>`;
+    }).join('')}
     <div style="padding:14px 18px 0"><button class="btn btn-soft" data-act="askFromSoon">${ic('spark')} Find recipes that use these</button></div>`;
 }
 
@@ -1902,7 +1998,7 @@ function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
   const title = mode === 'new' ? 'Enter item details' : mode === 'review' && S.scan?.mode === 'barcode' ? 'Does this look right?' : mode === 'review' ? 'Edit detected item' : 'Edit item';
-  const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Change it if it looks wrong.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
+  const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Follow the package label and storage directions; this estimate is only a reminder.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
   const lookupNote = mode === 'review' && it.lookupSource
     ? `<div class="est-note">${ic('tag')}<span>Product information from ${esc(it.lookupSource)}. Check every field before saving.</span></div>` : '';
   const existingNote = mode === 'review' && S.scan?.mode === 'barcode'
@@ -1927,7 +2023,7 @@ function itemForm(it, mode) {
     <div class="est-note">For packaged food, choose box, bag or can and enter how many you have.</div>
     <div class="field"><label for="f_cat">Food category</label><select class="input" id="f_cat">${CATS.map(c => `<option ${c === (it.cat || 'Other') ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><span class="lbl">Stored in</span><div class="store-sel" id="f_store" role="radiogroup">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button type="button" role="radio" aria-checked="${s === (it.store || 'Fridge')}" class="${s === (it.store || 'Fridge') ? 'on' : ''}" data-store="${s}" style="flex:1;padding:8px">${s}</button>`).join('')}</div></div>
-    <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" value="${it.exp || ''}"></div>
+    <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" min="${todayIso()}" data-orig="${esc(it.exp || '')}" value="${it.exp || ''}"><span class="field-err" id="f_expErr" hidden>Spoil date can't be in the past. Choose today or a later date.</span></div>
     <div class="est-note">${srcNote}</div>
   </form>
   <div class="sheet-foot">
@@ -1947,6 +2043,14 @@ function openItemForm(it, mode) {
     btn.disabled = !ok;
   };
   qty.addEventListener('input', validate);
+  const exp = $('#f_exp');
+  const checkExp = () => {
+    const bad = pastSpoilDate(exp.value, exp.dataset.orig);
+    exp.classList.toggle('bad', bad);
+    $('#f_expErr').hidden = !bad;
+  };
+  exp.addEventListener('input', checkExp);
+  exp.addEventListener('change', checkExp);
   $$('#f_store button').forEach(b => b.onclick = () => {
     $$('#f_store button').forEach(x => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
     b.classList.add('on'); b.setAttribute('aria-checked', 'true');
@@ -1981,7 +2085,11 @@ function readItemForm() {
   const cat = $('#f_cat').value;
   const store = $('#f_store .on')?.dataset.store || 'Fridge';
   const expIn = $('#f_exp').value;
-  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
+  if (pastSpoilDate(expIn, $('#f_exp').dataset.orig)) {
+    $('#f_expErr').hidden = false; $('#f_exp').classList.add('bad'); $('#f_exp').focus();
+    return null;
+  }
+  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store, name), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
 }
 
 /* ===========================================================
@@ -2357,7 +2465,7 @@ function photoItem(r) {
   const label = typeof r.label_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.label_date) && store !== 'Freezer' ? r.label_date : null;
   return { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat,
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
-    exp: label || estimate(cat, store), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
+    exp: label || estimate(cat, store, name), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
 }
 
 let receiptEditorImage = null;
@@ -2768,7 +2876,7 @@ async function lookupBarcode(rawBarcode, sc) {
       throw new Error('The product database returned this bar code without a usable product name. Nothing was added.');
     }
     const detected = { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
-      src: 'ai', exp: estimate(cat, store), on: true, barcode, lookupSource };
+      src: 'ai', exp: estimate(cat, store, name), on: true, barcode, lookupSource };
     sc.items = [detected]; sc.stage = 'review'; render();
     openItemForm({ ...detected, id: detected.tid }, 'review');
   } catch (error) {
@@ -2779,7 +2887,7 @@ function buildDetected(mode) {
   return DETECT[mode].map(d => ({
     tid: 't' + (uid++), name: d.name, brand: d.brand || '', productName: d.productName || '', emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
     pkg: d.qty || null, store: d.store, src: d.src,
-    exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store), on: true
+    exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store, d.name), on: true
   }));
 }
 function renderReview() {
@@ -2806,7 +2914,7 @@ function reviewCard(i) {
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${unitWord(v, u)}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
-      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : i.barcode ? 'Estimated from category' : 'AI estimate'}</span></div>
+      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : 'Estimated reminder'}</span></div>
     </div>
     <div class="rv-bottom"><span class="hint">Stored in</span><div class="store-sel">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button class="${s === i.store ? 'on' : ''}" data-act="reviewStore" data-arg="${i.tid}|${s}">${s}</button>`).join('')}</div></div>
     ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Check whether these are new packages or ones you've already counted.</span></div>` : ''}` : ''}
@@ -2928,7 +3036,7 @@ function reelHtml(r) {
     <div class="reel-caption" data-si="0"><span class="stepno">Step 1 of ${r.steps.length}</span>${esc(r.steps[0])}</div>`}
     <div class="reel-tap" data-act="reelTap" data-arg="${esc(r.id)}"></div>
     <div class="rail">
-      <button class="${liked ? 'on' : ''}" data-act="like" data-arg="${esc(r.id)}" aria-pressed="${liked}"><span class="ri">${ic('heart', liked)}</span><span class="num">${fmtK(r.likes + (liked ? 1 : 0))}</span></button>
+      <button class="${liked ? 'on' : ''}" data-act="like" data-arg="${esc(r.id)}" aria-pressed="${liked}"><span class="ri">${ic('heart', liked)}</span><span class="num">${fmtK(likeCount(r))}</span></button>
       <button class="${saved ? 'saved' : ''}" data-act="save" data-arg="${esc(r.id)}" aria-pressed="${saved}"><span class="ri">${ic('bookmark', saved)}</span>${saved ? 'Saved' : 'Save'}</button>
       <button data-act="share" data-arg="${esc(r.id)}"><span class="ri">${ic('share')}</span>Share</button>
       <button data-act="recipe" data-arg="${esc(r.id)}" data-source="reels"><span class="ri">${ic('list')}</span>Recipe</button>
@@ -3193,7 +3301,7 @@ function renderSettings() {
       ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Stay signed in', 'Sign out when using a shared device', '')}
     </div></div>
     <div class="set-group"><span class="lbl">Shopping</span><div class="set-card">
-      ${row('store', 'var(--basil-soft)', 'var(--basil)', 'Preferred store', S.zip ? `ZIP ${esc(S.zip)}` : 'ZIP optional', `<span class="val">${esc(S.store)} ${chev}</span>`, 'storeSheet')}
+      ${row('store', 'var(--basil-soft)', 'var(--basil)', 'Preferred store', 'Used for Shop ideas', `<span class="val">${esc(S.store)} ${chev}</span>`, 'storeSheet')}
       ${row('bookmark', 'var(--sky-soft)', 'var(--sky)', 'Saved recipes', `${plural(S.saved.size, 'recipe')} in your library`, chev, 'openSaved')}
       ${row('tag', 'var(--tomato-soft)', 'var(--tomato)', 'Shop ideas', `Recipe ingredients and ${esc(S.store)} offers`, chev, 'deals')}
     </div></div>
@@ -3284,7 +3392,7 @@ function renderDeals() {
   return `<div class="appbar" style="padding-bottom:6px"><button class="back" data-act="shopBack">${ic('left')} ${returnLabel}</button></div>
   <div class="scroll">
     <div class="shop-heading"><h1>Shop ideas</h1><p>Plan a meal with food you already have, then check your store's offers.</p></div>
-    <div class="store-banner shop-store"><span>Preferred store</span><b>${esc(S.store)}</b><span>${S.zip ? `ZIP ${esc(S.zip)} saved in MyPantry` : 'Choose your location on the store website'}</span><button data-act="storeSheet">Change store or ZIP</button></div>
+    <div class="store-banner shop-store"><span>Preferred store</span><b>${esc(S.store)}</b><span>Choose your location on the store website</span><button data-act="storeSheet">Change store</button></div>
     <div class="set-group"><span class="lbl">Ingredients to look for</span>${planHtml}</div>
     ${optionsHtml ? `<div class="set-group"><span class="lbl">Other meals to plan</span><div class="set-card">${optionsHtml}</div></div>` : ''}
     <div class="set-group shop-offers"><span class="lbl">Current store offers</span><div class="shop-offer-card">
@@ -3298,7 +3406,6 @@ function storeSheet() {
   return `<div class="sheet-head"><h2>Preferred store</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
   <div class="sheet-body">
     <div class="set-card">${STORES.map(s => `<label class="set-row" style="grid-template-columns:1fr auto;cursor:pointer"><b>${s}</b><input type="radio" name="storePick" value="${esc(s)}" ${s === selectedStore ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--basil)"></label>`).join('')}</div>
-    <div class="field"><label for="zipIn">ZIP code (optional)</label><input class="input num" id="zipIn" inputmode="numeric" maxlength="5" value="${esc(S.zip)}"><span class="field-err" id="zipErr" hidden>Enter a 5-digit ZIP code, or leave this blank.</span></div>
   </div>
   <div class="sheet-foot"><button class="btn btn-primary" data-act="storeSave">Save store</button></div>`;
 }
@@ -3373,7 +3480,7 @@ const ACT = {
     S.shopReturnTab = null;
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; }
+    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; void loadLikeCounts(); }
     S.tab = arg; render();
   },
   receiptStatus() { S.tab = 'scan'; render(); },
@@ -3389,6 +3496,21 @@ const ACT = {
   chatCancel(_, b) { b.closest('.actions').remove(); pushMsg('bot', '<p>No problem. Your food is still there.</p>'); },
   madeDirect(id, b) { b.closest('.actions').remove(); ask(`I made ${R(id).name}`); },
   async undoUse(_, b) { if (S.undo && await restorePantrySnapshot(S.undo)) { b.closest('.actions')?.remove(); pushMsg('bot', '<p>Undone. Your pantry is back the way it was.</p>'); refreshBadge(); } },
+  async chatRemoveConfirm(id, button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    const generation = accountGeneration;
+    const item = S.inv.find(i => i.id === id);
+    if (!item) { closeSheet(); return; }
+    const before = JSON.parse(snapshot());
+    try {
+      if (!await applyPantryTransition(before, before.filter(i => i.id !== id))) return;
+      if (generation !== accountGeneration) return;
+      closeSheet();
+      pushMsg('bot', `<p>Removed ${esc(item.name)} from your pantry.</p>`);
+      refreshBadge();
+    } finally { button.disabled = false; }
+  },
   async removeItem(id, b) {
     const it = S.inv.find(i => i.id === id); if (!it) return;
     const before = JSON.parse(snapshot()), after = before.filter(i => i.id !== id);
@@ -3520,7 +3642,7 @@ const ACT = {
     } else if (mode === 'review') {
       const r = S.scan.items.find(x => x.tid === id);
       Object.assign(r, data, { emoji: r.emoji || data.emoji, src: $('#f_exp').value && $('#f_exp').value !== r.exp ? 'label' : r.src });
-      if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store);
+      if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store, r.name);
       if (S.scan.mode === 'barcode') {
         if (!await saveNewItems([r], 'barcode')) return;
         closeSheet();
@@ -3593,8 +3715,8 @@ const ACT = {
   reviewEdit(tid) { const it = S.scan.items.find(x => x.tid === tid); openItemForm({ ...it, id: tid }, 'review'); },
   reviewStore(arg) {
     const [tid, s] = arg.split('|'); const it = S.scan.items.find(x => x.tid === tid);
-    it.store = s; if (it.src === 'ai') it.exp = estimate(it.cat, s);
-    else if (s === 'Freezer') { it.exp = estimate(it.cat, s); it.src = 'ai'; }
+    it.store = s; if (it.src === 'ai') it.exp = estimate(it.cat, s, it.name);
+    else if (s === 'Freezer') { it.exp = estimate(it.cat, s, it.name); it.src = 'ai'; }
     render();
   },
   async confirmScan() {
@@ -3617,7 +3739,7 @@ const ACT = {
     if (S.liked.has(id)) S.liked.delete(id); else { S.liked.add(id); learn(r); const h = document.createElement('div'); h.className = 'heart-pop'; h.textContent = '❤️'; b.closest('.reel').appendChild(h); setTimeout(() => h.remove(), 700); }
     const on = S.liked.has(id); persist();
     b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
-    b.innerHTML = `<span class="ri">${ic('heart', on)}</span><span class="num">${fmtK(r.likes + (on ? 1 : 0))}</span>`;
+    b.innerHTML = `<span class="ri">${ic('heart', on)}</span><span class="num">${fmtK(likeCount(r))}</span>`;
   },
   save(id, b) {
     const on = !S.saved.has(id); on ? S.saved.add(id) : S.saved.delete(id);
@@ -3744,7 +3866,6 @@ const ACT = {
 
   storeSheet() {
     openSheet(storeSheet());
-    $('#zipIn').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 5); });
   },
   openTheme() { openSheet(themeSheet()); },
   themePick(arg) {
@@ -3757,10 +3878,9 @@ const ACT = {
     toast(`${APP_THEMES[theme].name} theme applied.`, null, 'check');
   },
   storeSave() {
-    const z = $('#zipIn').value; if (z && !/^\d{5}$/.test(z)) { $('#zipErr').hidden = false; $('#zipIn').classList.add('bad'); return; }
     const store = $('input[name="storePick"]:checked')?.value;
     if (!STORES.includes(store)) return toast('Choose a store to save.', null, 'alert');
-    S.store = store; S.zip = z; persist(); closeSheet(); render(); toast(`Shopping preference saved: ${esc(S.store)}`, null, 'store');
+    S.store = store; persist(); closeSheet(); render(); toast(`Shopping preference saved: ${esc(S.store)}`, null, 'store');
   },
 deals() {
   S.shopRecipeId = null;
@@ -3919,8 +4039,33 @@ function enterApp() {
   S.auth = 'app'; S.chat = []; render();
   if (S.user.avatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
   startAppSessionTracking();
-  loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadFoodAddedEvents(); loadUserAppState(); loadChatHistory();
+  loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadFoodAddedEvents(); loadUserAppState(); loadChatHistory(); void loadLikeCounts(true);
 }
+
+/* ---------- On-screen keyboard handling ----------
+   Mobile keyboards cover the bottom of the page instead of resizing it (iOS Safari
+   especially). Size the app to the visible viewport so content can scroll above the
+   keyboard, and keep a focused field in view. */
+(function trackVisualViewport() {
+  const vv = window.visualViewport; if (!vv) return;
+  const root = document.documentElement;
+  let frame = 0;
+  const update = () => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
+      root.classList.toggle('keyboard-open', window.innerHeight - vv.height > 120);
+      if (window.scrollY) window.scrollTo(0, 0);
+    });
+  };
+  vv.addEventListener('resize', update);
+  vv.addEventListener('scroll', update);
+  update();
+})();
+phone.addEventListener('focusin', e => {
+  const field = e.target.closest?.('.auth input, .auth select, .auth textarea'); if (!field) return;
+  setTimeout(() => { if (document.activeElement === field) field.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 300);
+});
 
 /* ---------- Event wiring ---------- */
 phone.addEventListener('click', e => {
@@ -3950,7 +4095,7 @@ phone.addEventListener('change', e => {
   }
 });
 phone.addEventListener('input', e => {
-  if (e.target.id === 'ingSearch') { S.ingQuery = e.target.value; $('#ingList').innerHTML = ingListHtml(); }
+  if (e.target.id === 'ingSearch') { S.ingQuery = e.target.value; $('#ingList').innerHTML = S.ingView === 'soon' ? renderSoon() : ingListHtml(); }
   if ((e.target.id === 'photoBrightness' || e.target.id === 'photoContrast') && S.scan?.editor) {
     S.scan.editor[e.target.id === 'photoBrightness' ? 'brightness' : 'contrast'] = Number(e.target.value);
     S.scan.editor.error = null; drawReceiptEditor();
@@ -4111,6 +4256,20 @@ function bindForms() {
       $('#suBtn').disabled = !(rules.len && rules.sym && rules.match && emOk);
     };
     sf.addEventListener('input', upd);
+    // Mobile keyboards: Enter moves to the next field. On the last field it submits when the
+    // form is valid, otherwise it closes the keyboard so the Create account button is visible.
+    const fields = ['#su_name', '#su_email', '#su_pw', '#su_pw2'].map(sel => $(sel));
+    sf.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const at = fields.indexOf(e.target); if (at < 0) return;
+      if (at < fields.length - 1) { e.preventDefault(); fields[at + 1].focus(); return; }
+      upd();
+      if ($('#suBtn').disabled) { e.preventDefault(); e.target.blur(); }
+    });
+    // Tapping blank space on the form closes the keyboard.
+    sf.addEventListener('pointerdown', e => {
+      if (!e.target.closest('input, button, a, label') && document.activeElement?.matches?.('input')) document.activeElement.blur();
+    });
     sf.addEventListener('submit', async e => {
       e.preventDefault(); if ($('#suBtn').disabled) return; upd(); if ($('#suBtn').disabled) return;
       const em = $('#su_email').value.trim().toLowerCase();
@@ -4157,7 +4316,7 @@ async function replaceDemoPantry(items, resetAll = false) {
   if (!isDemoAccount()) return false;
   if (!await doReset()) return false;
   if (resetAll) {
-    S.saved.clear(); S.metric = false; S.reminders = true; S.store = "Smith's"; S.zip = '84604';
+    S.saved.clear(); S.metric = false; S.reminders = true; S.store = "Smith's";
     resetAIChat(); S.conversationId = newUuid(); S.tab = 'home'; S.reelView = 'feed';
   }
   if (items.length && !await saveNewItems(items, 'manual', false)) return false;

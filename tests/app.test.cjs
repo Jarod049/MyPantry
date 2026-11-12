@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good' } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good', likeCounts } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -97,6 +97,11 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
           }
         };
       }
+    },
+    async rpc(name, args) {
+      queries.push({ rpc: name, args });
+      if (name === 'recipe_like_counts') return likeCounts ? { data: likeCounts, error: null } : { data: null, error: new Error('missing function') };
+      return { data: null, error: new Error(`Unknown rpc ${name}`) };
     },
     from(table) {
       let action = null, rowsToWrite = null, single = false, limitCount = null;
@@ -444,7 +449,9 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   const calls = [];
   f.w.fetch = async (url, options) => { calls.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ readable: true, store_name: null, items: [
     { name: 'Greek yogurt', category: 'Dairy & Eggs', quantity: 32, unit: 'oz', storage: 'Fridge', label_date: '2030-02-14' },
-    { name: 'Apples', category: 'Produce', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Pineapple', category: 'Fruits', quantity: 5, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Beef Meat Stick', category: 'Meat & Seafood', quantity: 1, unit: 'ct', storage: 'Fridge', label_date: null },
+    { name: 'Raw Beef', category: 'Meat & Seafood', quantity: 1, unit: 'ct', storage: 'Fridge', label_date: null },
     { name: 'Frozen peas', category: 'Frozen', quantity: 1, unit: 'bag', storage: 'Freezer', label_date: '2030-03-01' }
   ] }) }; };
   f.click('[data-act="tab"][data-arg="scan"]');
@@ -455,16 +462,20 @@ test('fridge photo is read by the scan function, uses printed dates, and saves',
   assert.equal(calls.length, 1); assert.equal(calls[0].kind, 'pantry');
   assert.match(f.text(), /Pantry photo processed/);
   f.click('[data-act="receiptStatus"]');
-  assert.match(f.text(), /We found 3 items/);
+  assert.match(f.text(), /We found 5 items/);
   assert.match(f.text(), /Read from label/);
+  assert.match(f.text(), /🍍/);
+  assert.match(f.text(), /🥓/);
   f.click('[data-act="confirmScan"]'); await tick();
-  assert.equal(database.length, 3);
+  assert.equal(database.length, 5);
   assert.ok(database.every(r => r.way_added === 'pantry_photo' && r.auth_user_id === 'alice'));
   const yogurt = database.find(r => r.ingredient_name === 'Greek yogurt');
   assert.equal(yogurt.expiration_date, '2030-02-14'); assert.equal(yogurt.expiration_source, 'label');
   const peas = database.find(r => r.ingredient_name === 'Frozen peas');
   assert.equal(peas.expiration_source, 'ai'); assert.equal(peas.storage_location, 'Freezer');
-  assert.equal(database.find(r => r.ingredient_name === 'Apples').expiration_source, 'ai');
+  const stick = database.find(r => r.ingredient_name === 'Beef Meat Stick');
+  assert.equal(stick.food_type, 'Snacks');
+  assert.notEqual(stick.expiration_date, database.find(r => r.ingredient_name === 'Raw Beef').expiration_date);
 });
 test('pantry processing uses the global progress flow while the user navigates', async t => {
   const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
@@ -929,4 +940,125 @@ test('published recipes from Supabase are added to Reels', async t => {
   f.click('[data-act="tab"][data-arg="reels"]'); await tick();
   assert.ok(f.queries.some(q => q.table === 'recipe' && q.column === 'is_published'));
   assert.ok(f.w.document.querySelector('.reel[data-id="supa-toast"]'));
+});
+
+const soonDate = days => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+test('Going bad soon keeps the search bar and food categories and filters by them', async t => {
+  const database = [
+    { ...pantryRow(1, 'Milk', 1, 'gal', 'soon-user'), expiration_date: soonDate(2), food_type: 'Dairy' },
+    { ...pantryRow(2, 'Spinach', 1, 'ct', 'soon-user'), expiration_date: soonDate(3), food_type: 'Vegetables' },
+    { ...pantryRow(3, 'Rice', 1, 'lb', 'soon-user'), food_type: 'Grains' }
+  ];
+  const f = boot({ id: 'soon-user', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="ing"]'); await tick();
+  f.click('[data-act="ingView"][data-arg="soon"]'); await tick();
+  const doc = f.w.document;
+  assert.ok(doc.querySelector('#ingSearch'), 'search bar is shown');
+  assert.ok(doc.querySelector('.cat-chips [data-act="ingCat"][data-arg="All"]'), 'category chips are shown');
+  const names = () => [...doc.querySelectorAll('#ingList .item .name')].map(n => n.textContent);
+  assert.deepEqual(names(), ['Spinach', 'Milk'], 'only food going bad is listed, grouped by category');
+  assert.deepEqual([...doc.querySelectorAll('#ingList .cat h2')].map(h => h.textContent), ['Vegetables', 'Dairy & Eggs']);
+  const search = doc.querySelector('#ingSearch');
+  search.value = 'spin'; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  assert.deepEqual(names(), ['Spinach']);
+  search.value = ''; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  const dairy = doc.querySelector('.cat-chips [data-arg="Dairy & Eggs"]');
+  if (dairy) { dairy.click(); await tick(); assert.deepEqual(names(), ['Milk']); }
+  f.click('.cat-chips [data-arg="All"]'); await tick();
+  const search2 = doc.querySelector('#ingSearch');
+  search2.value = 'rice'; search2.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  assert.match(doc.querySelector('#ingList').textContent, /No food matches "rice"/);
+});
+test('Reels like counts come from real account likes, not seeded numbers', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'liker'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'liker'), pantryRow(3, 'Butter', 1, 'lb', 'liker')];
+  const f = boot({ id: 'liker', database, likeCounts: [{ recipe_id: 'scrambled', likes: 2 }] }); t.after(() => f.dom.window.close()); await tick();
+  assert.ok(f.queries.some(q => q.rpc === 'recipe_like_counts'));
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  const btn = () => f.w.document.querySelector('.reel[data-id="scrambled"] [data-act="like"]');
+  assert.equal(btn().querySelector('.num').textContent, '2');
+  btn().click(); await tick();
+  assert.equal(btn().querySelector('.num').textContent, '3', 'your like is added');
+  btn().click(); await tick();
+  assert.equal(btn().querySelector('.num').textContent, '2');
+  assert.ok(f.w.MYPANTRY_RECIPES.every(r => !r.likes), 'built-in catalog has no fake like numbers');
+});
+test('Reels show zero likes when nobody has liked a recipe or counts are unavailable', async t => {
+  const database = [pantryRow(1, 'Eggs', 12, 'ct', 'nolikes'), pantryRow(2, 'Sandwich bread', 1, 'loaf', 'nolikes'), pantryRow(3, 'Butter', 1, 'lb', 'nolikes')];
+  const f = boot({ id: 'nolikes', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+  assert.equal(f.w.document.querySelector('.reel[data-id="scrambled"] [data-act="like"] .num').textContent, '0');
+});
+test('store preference no longer asks for a ZIP code', async t => {
+  const f = boot({ id: 'nozip', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="settings"]'); await tick();
+  assert.doesNotMatch(f.text(), /ZIP/);
+  f.click('[data-act="storeSheet"]'); await tick();
+  assert.equal(f.w.document.querySelector('#zipIn'), null);
+  f.w.document.querySelector('input[name="storePick"][value="Walmart"]').checked = true;
+  f.click('[data-act="storeSave"]'); await tick(); await new Promise(r => setTimeout(r, 250));
+  const state = f.mockTables.user_app_state?.find(row => row.user_id === 'nozip');
+  assert.equal(state?.preferred_store, 'Walmart');
+  assert.equal(state?.zip_code, null);
+});
+test('sign-up keeps Create account in a sticky bar and Enter moves between fields', async t => {
+  const f = boot(); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="auth"][data-arg="signup"]'); await tick();
+  const doc = f.w.document;
+  assert.ok(doc.querySelector('.auth-submit-bar #suBtn'), 'button is inside the sticky submit bar');
+  const enter = el => el.dispatchEvent(new f.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  doc.querySelector('#su_name').focus(); enter(doc.querySelector('#su_name'));
+  assert.equal(doc.activeElement.id, 'su_email');
+  doc.querySelector('#su_pw2').focus(); enter(doc.querySelector('#su_pw2'));
+  assert.notEqual(doc.activeElement.id, 'su_pw2', 'invalid form closes the keyboard instead of submitting');
+});
+
+test('spoil date cannot be set in the past when adding food', async t => {
+  const database = [];
+  const f = boot({ id: 'pastdate', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]');
+  f.click('[data-act="manual"]');
+  const doc = f.w.document;
+  const exp = doc.getElementById('f_exp');
+  assert.equal(exp.min, soonDate(0), 'date picker starts at today');
+  for (const [id, value] of Object.entries({ f_name: 'Old yogurt', f_qty: '1', f_unit: 'ct', f_cat: 'Other', f_exp: soonDate(-3) })) doc.getElementById(id).value = value;
+  exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(doc.getElementById('f_expErr').hidden, false, 'error shows right away');
+  f.click('#saveItemBtn'); await tick();
+  assert.equal(database.length, 0, 'nothing is saved');
+  assert.ok(doc.getElementById('itemForm'), 'form stays open');
+  exp.value = soonDate(0); exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(doc.getElementById('f_expErr').hidden, true);
+  f.click('#saveItemBtn'); await tick(); await tick();
+  assert.equal(database.length, 1, 'today is allowed');
+});
+test('an existing item with a passed date keeps it, but a new past date is rejected', async t => {
+  const database = [{ ...pantryRow(1, 'Old milk', 1, 'gal', 'oldedit'), expiration_date: soonDate(-2) }];
+  const f = boot({ id: 'oldedit', database }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="ing"]'); await tick();
+  f.click('#ingList [data-act="edit"]'); await tick();
+  const doc = f.w.document, exp = doc.getElementById('f_exp');
+  const change = () => exp.dispatchEvent(new f.w.Event('change', { bubbles: true }));
+  assert.equal(exp.value, soonDate(-2));
+  change();
+  assert.equal(doc.getElementById('f_expErr').hidden, true, 'unchanged passed date is allowed');
+  exp.value = soonDate(-5); change();
+  assert.equal(doc.getElementById('f_expErr').hidden, false, 'a different past date is rejected');
+  f.click('#saveItemBtn'); await tick();
+  assert.ok(!f.queries.some(q => q.table === 'pantry_item' && q.update), 'nothing is sent to the database');
+});
+
+test('chat deletion requires confirmation and only deletes the matching owned row', async t => {
+  const database = [
+    pantryRow(1, 'Apples', 2, 'ct', 'alice'),
+    pantryRow(2, 'Apples', 1, 'ct', 'bob')
+  ];
+  const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
+  f.form('#chatForm', { chatIn: 'Please remove Apples from my pantry.' });
+  assert.equal(database.length, 2);
+  f.click('#scrim [data-act="closeSheet"]');
+  assert.equal(database.length, 2);
+  f.form('#chatForm', { chatIn: 'Delete Apples' });
+  f.click('[data-act="chatRemoveConfirm"]'); await tick();
+  assert.deepEqual(database.map(r => r.auth_user_id), ['bob']);
+  assert.match(f.text(), /Removed Apples/);
 });
