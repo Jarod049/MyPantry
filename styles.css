@@ -592,6 +592,19 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .waste-row-meta { display: block; color: var(--ink-3); font-size: 12px; }
 .waste-row-qty { color: var(--ink-2); font-size: 13px; font-weight: 650; white-space: nowrap; }
 .waste-empty { padding: 26px 16px; border-radius: var(--r-md); background: var(--surface-2); color: var(--ink-2); text-align: center; font-size: 14px; }
+.food-added-stats { display: grid; gap: 3px; margin-top: 5px; }
+.food-added-month { font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1.2; }
+.food-added-lifetime { color: var(--ink-2); font-size: 13px; }
+.food-added-month-nav { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; align-items: center; gap: 8px; }
+.food-added-month-nav span { text-align: center; font-weight: 700; }
+.food-added-month-nav button { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-2); color: var(--ink); font-size: 24px; cursor: pointer; }
+.food-added-month-nav button:hover:not(:disabled) { border-color: var(--basil); }
+.food-added-month-nav button:disabled { opacity: .4; cursor: default; }
+.food-added-month-nav button:focus-visible, .food-added-current:focus-visible { outline: 2.5px solid var(--sky); outline-offset: 2px; }
+.food-added-current { justify-self: center; border: 0; background: transparent; color: var(--basil); font-size: 13px; font-weight: 700; cursor: pointer; }
+.food-added-totals { display: grid; gap: 4px; padding: 14px; border-radius: var(--r-md); background: var(--surface-2); text-align: center; }
+.food-added-totals span { color: var(--ink-2); font-size: 13px; }
+.food-added-row .waste-row-meta { overflow-wrap: anywhere; }
 .recipe-use-card .waste-card-amount { display: block; margin: 4px 0 0; }
 .recipe-use-remove { border: 0; padding: 8px; background: transparent; color: var(--basil); font-size: 12px; font-weight: 700; cursor: pointer; }
 .recipe-use-remove:hover { text-decoration: underline; }

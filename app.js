@@ -343,6 +343,7 @@ function freshState() {
     prefs: {}, liked: new Set(), likeCounts: {}, saved: new Set(), watched: new Set(), conversationId: null,
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     recipeUseEvents: [], recipeUseStatus: 'loading',
+    foodAddedEvents: [], foodAddedStatus: 'loading', foodAddedMonth: null,
     ingView: 'all', ingCat: 'All', ingQuery: '',
 scan: null, setPage: null, reelView: 'feed', shopRecipeId: null, shopReturnTab: null,
 profileDraft: null, profileCamera: null, profileError: null, profileLoading: false, profileSaving: false,
@@ -370,6 +371,7 @@ let accountGeneration = 0;
 let pantryRequest = 0;
 let wasteRequest = 0;
 let recipeUseRequest = 0;
+let foodAddedRequest = 0;
 let recipeUseInFlight = false;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
@@ -445,6 +447,32 @@ async function loadWasteEvents() {
   }
   if (S.tab === 'ing') render();
   if ($('#wasteHistorySheet')) openSheet(wasteHistorySheet());
+}
+async function loadFoodAddedEvents() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++foodAddedRequest;
+  if (S.foodAddedStatus !== 'synced') S.foodAddedStatus = 'loading';
+  const events = [];
+  try {
+    for (let start = 0; ; start += 500) {
+      const { data, error } = await sb.from('food_added_events')
+        .select('event_id,user_id,source_ingredient_id,ingredient_name,brand,product_name,quantity,measurement,way_added,added_at')
+        .eq('user_id', owner).order('added_at', { ascending: false }).order('event_id', { ascending: false })
+        .range(start, start + 499);
+      if (generation !== accountGeneration || request !== foodAddedRequest) return;
+      if (error) throw error;
+      events.push(...data);
+      if (data.length < 500) break;
+    }
+    S.foodAddedEvents = events;
+    S.foodAddedStatus = 'synced';
+  } catch (error) {
+    if (generation !== accountGeneration || request !== foodAddedRequest) return;
+    S.foodAddedStatus = 'error';
+    console.error('[MyPantry] food added history load failed', error);
+  }
+  if (S.tab === 'ing') render();
+  if ($('#foodAddedHistorySheet')) openSheet(foodAddedHistorySheet());
 }
 async function loadRecipeUseEvents() {
   if (!sb || !S.user?.id) return;
@@ -1139,12 +1167,16 @@ async function restorePantrySnapshot(snapshotText) {
 }
 
 let addingFood = false;
-async function saveNewItems(items, mode = 'manual') {
+let pendingFoodAdd = null;
+async function saveNewItems(items, mode = 'manual', trackAddition = true) {
   if (addingFood || !items.length) return false;
   if (!sb) { addItems(items); return true; }
   if (!S.user?.id) return false;
   const owner = S.user.id, generation = accountGeneration;
   const scan = S.scan;
+  // Barcode review can save from either the item sheet or the review button.
+  // Both controls belong to the same scan confirmation and share retry IDs.
+  const flow = mode === 'manual' ? ($('#itemForm') || scan) : (scan || $('#itemForm'));
   addingFood = true;
   // Invalidate any older load that could overwrite the confirmed insert.
   ++pantryRequest;
@@ -1160,18 +1192,43 @@ async function saveNewItems(items, mode = 'manual') {
       way_added: ({ pantry: 'pantry_photo', receipt: 'receipt', barcode: 'barcode' })[mode] || 'manual',
       status: statusFor(i.exp)
     }));
+    // Keep the same event IDs when a response is lost and the user retries the
+    // same confirmation. The database guarantees one pantry row per event ID.
+    const fingerprint = trackAddition ? JSON.stringify({ owner, rows }) : null;
+    if (trackAddition) {
+      if (pendingFoodAdd?.fingerprint !== fingerprint || pendingFoodAdd.flow !== flow) {
+        pendingFoodAdd = { fingerprint, flow, ids: rows.map(() => newUuid()) };
+      }
+      rows.forEach((row, index) => { row.addition_event_id = pendingFoodAdd.ids[index]; });
+    }
     const { data, error } = await sb.from('pantry_item').insert(rows).select();
     if (generation !== accountGeneration) return false;
     if (error) throw error;
     if (!data || data.length !== items.length) throw new Error('The database did not confirm every ingredient. Reload before retrying.');
+    if (trackAddition) pendingFoodAdd = null;
     S.inv.push(...data.map(rowToItem));
     sync = 'synced';
+    if (trackAddition) void loadFoodAddedEvents();
     // A request can finish after the user navigates away. Keep the saved rows,
     // but do not replace their newer screen with the old scan completion.
     if (S.scan !== scan) { render(); return false; }
     return true;
   } catch (error) {
     if (generation !== accountGeneration) return false;
+    if (trackAddition && pendingFoodAdd) {
+      try {
+        const { data: recorded, error: lookupError } = await sb.from('food_added_events')
+          .select('event_id').eq('user_id', owner).in('event_id', pendingFoodAdd.ids);
+        if (!lookupError && recorded?.length === items.length && generation === accountGeneration) {
+          // A committed insert can lose its response. The event is written in
+          // the same transaction, so its presence confirms the pantry insert.
+          pendingFoodAdd = null;
+          await loadPantry();
+          void loadFoodAddedEvents();
+          if (sync === 'synced') return S.scan === scan;
+        }
+      } catch (_) { /* Keep the original save error below. */ }
+    }
     sync = 'error';
     const form = $('#itemForm');
     if (form) {
@@ -1695,6 +1752,75 @@ function wasteHistorySheet() {
     <div class="sheet-body" id="wasteHistorySheet"><p>Amounts are grouped by weight, volume, and item type.</p>${intro}
       ${S.wasteStatus === 'synced' ? rows ? `<div class="waste-list">${rows}</div>` : '<div class="waste-empty">No food waste has been logged yet. Open an ingredient to log what you threw away.</div>' : ''}</div>`;
 }
+function foodAddedCurrentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+function foodAddedSelectedMonth() {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(S.foodAddedMonth || '') ? S.foodAddedMonth : foodAddedCurrentMonth();
+}
+function foodAddedMonthLabel(month) {
+  const [year, number] = month.split('-').map(Number);
+  return new Date(year, number - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+function foodAddedMonthEvents(month = foodAddedSelectedMonth()) {
+  const [year, number] = month.split('-').map(Number);
+  return (S.foodAddedEvents || []).filter(event => {
+    const added = new Date(event.added_at);
+    return added.getFullYear() === year && added.getMonth() + 1 === number;
+  });
+}
+function foodAddedShiftMonth(offset) {
+  const [year, number] = foodAddedSelectedMonth().split('-').map(Number);
+  const target = new Date(year, number - 1 + offset, 1);
+  const next = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}`;
+  S.foodAddedMonth = next > foodAddedCurrentMonth() ? foodAddedCurrentMonth() : next;
+  openSheet(foodAddedHistorySheet());
+}
+const foodAddedSourceLabel = source => ({ manual: 'Manual entry', barcode: 'Barcode scan', receipt: 'Receipt scan', pantry_photo: 'Pantry photo' })[source] || 'Food added';
+function foodAddedCard() {
+  const month = foodAddedCurrentMonth(), label = foodAddedMonthLabel(month);
+  const count = foodAddedMonthEvents(month).length, total = (S.foodAddedEvents || []).length;
+  const ready = S.foodAddedStatus === 'synced';
+  const summary = S.foodAddedStatus === 'loading' ? 'Loading food history…'
+    : S.foodAddedStatus === 'error' ? 'Couldn’t load food history'
+      : `${plural(count, 'addition')} in ${label}`;
+  const lifetime = ready ? `${plural(total, 'addition')} since tracking began` : 'Track confirmed food additions';
+  return `<button class="waste-card food-added-card" data-act="foodAddedHistory" aria-label="Food added, ${esc(summary)}. ${esc(lifetime)}. View history">
+    <span class="waste-card-head"><span class="waste-card-title">Food added</span><span class="waste-card-link">View history ›</span></span>
+    <span class="food-added-stats"><span class="food-added-month">${esc(summary)}</span><span class="food-added-lifetime">${esc(lifetime)}</span></span>
+  </button>`;
+}
+function foodAddedHistorySheet() {
+  const month = foodAddedSelectedMonth(), label = foodAddedMonthLabel(month);
+  const events = foodAddedMonthEvents(month).slice().sort((a, b) => Date.parse(b.added_at) - Date.parse(a.added_at));
+  const current = month === foodAddedCurrentMonth();
+  const status = S.foodAddedStatus === 'loading' ? '<div class="waste-empty">Loading food history…</div>'
+    : S.foodAddedStatus === 'error' ? '<div class="waste-empty">Food history could not be loaded. Try again.</div><button class="btn btn-soft" data-act="foodAddedRetry">Try again</button>'
+      : `<div class="food-added-totals"><b>${plural(events.length, 'addition')} in ${esc(label)}</b><span>${plural((S.foodAddedEvents || []).length, 'addition')} since tracking began</span></div>`;
+  const rows = events.map(event => {
+    const identity = [event.brand, event.product_name].filter(Boolean).map(esc).join(' · ');
+    const quantity = Number(event.quantity);
+    const amount = Number.isFinite(quantity) && quantity > 0 && event.measurement
+      ? qtyText(quantity, event.measurement) : 'Amount unavailable';
+    const addedAt = new Date(event.added_at);
+    const date = Number.isNaN(addedAt.getTime()) ? 'Date unavailable'
+      : addedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    return `<div class="waste-row food-added-row">
+      <div class="waste-row-main"><span class="waste-row-name">${esc(event.ingredient_name || 'Food item')}</span>
+        ${identity ? `<span class="waste-row-meta">${identity}</span>` : ''}
+        <span class="waste-row-meta">${esc(foodAddedSourceLabel(event.way_added))} · ${esc(date)}</span></div>
+      <span class="waste-row-qty">${esc(amount)}</span>
+    </div>`;
+  }).join('');
+  return `<div class="sheet-head"><h2>Food added</h2><button class="close" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>
+    <div class="sheet-body" id="foodAddedHistorySheet"><p>Each confirmed new pantry entry counts as one addition, even if you entered several boxes or bags. The amount is shown beside each entry. Additions stay in this history after food is used or removed. History starts when tracking was enabled.</p>
+      <div class="food-added-month-nav"><button type="button" data-act="foodAddedMonthPrev" aria-label="Previous month">‹</button>
+        <span aria-live="polite">${esc(label)}</span>
+        <button type="button" data-act="foodAddedMonthNext" aria-label="Next month" ${current ? 'disabled' : ''}>›</button></div>
+      ${current ? '' : '<button class="food-added-current" data-act="foodAddedMonthCurrent">Back to this month</button>'}
+      ${status}${S.foodAddedStatus === 'synced' ? rows ? `<div class="waste-list">${rows}</div>` : `<div class="waste-empty">No additions were logged in ${esc(label)}.</div>` : ''}</div>`;
+}
 function recipeUsesThisMonth() {
   const now = new Date();
   return S.recipeUseEvents.filter(event => {
@@ -1787,7 +1913,7 @@ function renderIng() {
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
     ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Going bad soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
-    <div class="scroll">${wasteCard()}${recipeUseCard()}${content}<div style="height:90px"></div></div>
+    <div class="scroll">${foodAddedCard()}${wasteCard()}${recipeUseCard()}${content}<div style="height:90px"></div></div>
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
 function syncChip() {
@@ -3396,6 +3522,14 @@ const ACT = {
   ingView(arg) { S.ingView = arg; render(); },
   ingCat(arg) { S.ingCat = arg; render(); },
   edit(id) { const it = S.inv.find(i => i.id === id); if (it) openItemForm(it, 'edit'); },
+  foodAddedHistory() { openSheet(foodAddedHistorySheet()); },
+  foodAddedMonthPrev() { foodAddedShiftMonth(-1); },
+  foodAddedMonthNext() { foodAddedShiftMonth(1); },
+  foodAddedMonthCurrent() {
+    S.foodAddedMonth = foodAddedCurrentMonth();
+    openSheet(foodAddedHistorySheet());
+  },
+  foodAddedRetry() { void loadFoodAddedEvents(); },
   wasteHistory() { openSheet(wasteHistorySheet()); },
   wasteRetry() { void loadWasteEvents(); },
   recipeUseHistory() { openSheet(recipeUseHistorySheet()); },
@@ -3905,7 +4039,7 @@ function enterApp() {
   S.auth = 'app'; S.chat = []; render();
   if (S.user.avatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
   startAppSessionTracking();
-  loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadUserAppState(); loadChatHistory(); void loadLikeCounts(true);
+  loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadFoodAddedEvents(); loadUserAppState(); loadChatHistory(); void loadLikeCounts(true);
 }
 
 /* ---------- On-screen keyboard handling ----------
@@ -4185,7 +4319,7 @@ async function replaceDemoPantry(items, resetAll = false) {
     S.saved.clear(); S.metric = false; S.reminders = true; S.store = "Smith's";
     resetAIChat(); S.conversationId = newUuid(); S.tab = 'home'; S.reelView = 'feed';
   }
-  if (items.length && !await saveNewItems(items, 'manual')) return false;
+  if (items.length && !await saveNewItems(items, 'manual', false)) return false;
   S.scan = null; S.chat = []; persist(); render();
   return true;
 }

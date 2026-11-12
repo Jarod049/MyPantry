@@ -12,6 +12,10 @@ the account data currently used by the app.
 - Confirmed food waste in `food_waste_events`: the ingredient, amount, unit,
   reason, and time reported by the user. Waste history stays available after
   the ingredient is removed or the inventory is reset.
+- Confirmed food additions in `food_added_events`: one event per new pantry
+  entry, with the original quantity, unit, brand, product, entry method, and
+  time. Ingredients shows monthly and all-time counts since tracking began.
+  Deleting or resetting pantry rows preserves this history.
 - Confirmed recipe uses in `recipe_use_events`: source (`reels` or `ai`), recipe
   name, optional Reels recipe ID, and time used. Ingredients shows this month's
   total by source and a dated history; each use is counted separately, including
@@ -73,16 +77,21 @@ migration.
    `record_recipe_use` function updates pantry quantities and logs a catalog
    recipe in one database transaction. Authenticated users can read and remove
    only their own records.
-9. Deploy the revised `receipt-scan`, `barcode-lookup`, and `pantry-chat` Edge
+9. Review and apply `supabase/migrations/20261111_food_added_tracking.sql`
+   before deploying food-added tracking. It records each confirmed pantry
+   insertion and its history in one transaction. Only an account's own history
+   is readable; existing pantry rows are not backfilled.
+10. Deploy the revised `receipt-scan`, `barcode-lookup`, and `pantry-chat` Edge
    Functions to the target Supabase project after the migration and before
    deploying the frontend. This is a separate Supabase deployment; the GitHub
    Pages workflow does not deploy Edge Functions.
-10. Deploy the matching frontend through the existing Pages workflow. It uses
+11. Deploy the matching frontend through the existing Pages workflow. It uses
    the repository's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` Actions
    secrets; never add a service-role or secret key to browser code.
-11. In a preview build, sign in and check that pantry edits, deletion, recipe
-   consumption, food waste, confirmed recipe uses, recipe activity, settings,
-   and chat messages remain after a reload. Upload and remove a profile photo,
+12. In a preview build, sign in and check that pantry edits, deletion, recipe
+    consumption, food waste, confirmed recipe uses, food-added monthly and
+    all-time counts, recipe activity, settings, and chat messages remain after
+    a reload. Upload and remove a profile photo,
    then verify it survives a new session. Confirm that a branded item keeps its
    brand and product name, and that multiple boxes remain represented after a
    reload. Check two accounts to confirm they cannot see each other's records
@@ -100,6 +109,14 @@ transaction; Undo reverses the pantry change and removes that use. Pantry Pal an
 text, so users enter the recipe name when logging a meal suggested by the AI.
 This manual log does not automatically reduce pantry quantities. Recipe-use
 tracking does not require an Edge Function change.
+
+Food-added history counts confirmed new pantry entries, including repeat
+additions of the same food. Manual and scan review saves count; editing an
+existing entry, restoring one through Undo, and loading Demo sample data do
+not. The dated event survives pantry deletion or reset. Counts start when the
+migration and matching frontend are deployed; earlier or deleted pantry items
+cannot be recovered from current inventory. Quantities are retained for each
+entry but never summed across incompatible units.
 
 Package counts use the pantry item's quantity and measurement (for example,
 quantity `2` and measurement `box` appears as “2 boxes”). Branded products and batches with different expiration dates may
