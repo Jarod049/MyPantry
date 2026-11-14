@@ -1301,7 +1301,41 @@ function closeSheet() { const s = $('#scrim'); if (s) s.remove(); }
 
 /* ---------- Render root ---------- */
 let reelCtl = null;
+const SWIPE_ACTION_WIDTH = 88;
+let openSwipeRow = null;
+let swipeGesture = null;
+let suppressSwipeClick = null;
+function closeSwipeRow(row = openSwipeRow) {
+  if (!row) return;
+  row.classList.remove('is-open', 'is-dragging');
+  row.style.removeProperty('--swipe-x');
+  const action = row.querySelector('.swipe-delete');
+  if (action) action.hidden = true;
+  if (openSwipeRow === row) openSwipeRow = null;
+}
+function revealSwipeRow(row) {
+  if (openSwipeRow && openSwipeRow !== row) closeSwipeRow();
+  const action = row.querySelector('.swipe-delete');
+  if (action) action.hidden = false;
+  row.classList.remove('is-dragging');
+  row.style.removeProperty('--swipe-x');
+  row.classList.add('is-open');
+  openSwipeRow = row;
+}
+function resetSwipeInteraction() {
+  swipeGesture = null;
+  suppressSwipeClick = null;
+  closeSwipeRow();
+}
+function cancelActiveSwipe() {
+  const gesture = swipeGesture;
+  swipeGesture = null;
+  if (!gesture?.horizontal || !gesture.row.isConnected) return;
+  if (gesture.wasOpen) revealSwipeRow(gesture.row);
+  else closeSwipeRow(gesture.row);
+}
 function render() {
+  resetSwipeInteraction();
   applyVisualTheme();
   unmountReels();
   syncDemoToolsVisibility();
@@ -1909,6 +1943,7 @@ function renderIng() {
   } else {
     content = `<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${P.search}</svg><input class="input" id="ingSearch" placeholder="Search your food" value="${esc(S.ingQuery)}" aria-label="Search your food"></div>
       <div class="chips cat-chips">${['All', ...CATS].map(c => `<button class="chip ${S.ingCat === c ? 'on' : ''}" data-act="ingCat" data-arg="${c}">${c}</button>`).join('')}</div>
+      <p class="swipe-hint">Swipe left on an ingredient to delete it.</p>
       <div id="ingList">${S.ingView === 'soon' ? renderSoon() : ingListHtml()}</div>`;
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
@@ -1922,12 +1957,12 @@ function syncChip() {
   return `<span class="pill ${m[1]}" id="syncChip" title="${sb ? 'Pantry is stored in Supabase' : 'No Supabase config found; changes stay in this browser'}">${m[0]}</span>`;
 }
 function itemRow(i) {
-  return `<button class="item" data-act="edit" data-arg="${i.id}" aria-label="Edit ${esc(i.name)}">
+  return `<div class="swipe-item" data-swipe-id="${esc(i.id)}"><button class="item swipe-item-main" data-act="edit" data-arg="${esc(i.id)}" aria-label="Open ${esc(i.name)} to edit or delete">
     ${imgHtml(i)}
     <span><span class="name">${esc(i.name)}</span><br><span class="qty num">${qtyText(i.qty, i.unit)} · ${i.store}</span>
       <span class="date num">${i.src === 'label' ? ic('tag') : ic('spark')} ${spoilText(i)}${i.src === 'ai' ? ' (estimate)' : ''}</span></span>
     <span class="right">${pillFor(i)}<svg class="edit-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P.pencil}</svg></span>
-  </button>`;
+  </button><button class="swipe-delete" data-act="deleteItem" data-arg="${esc(i.id)}" aria-label="Delete ${esc(i.name)}" hidden>${ic('trash')}<span>Delete</span></button></div>`;
 }
 // Search text and category chips apply to both "All items" and "Going bad soon".
 function filteredInv() {
@@ -3659,13 +3694,19 @@ const ACT = {
       S.scan = { mode: 'manual', stage: 'done', added: [data] }; S.tab = 'scan'; render();
     }
   },
-  async deleteItem(id) {
+  async deleteItem(id, button) {
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
     const before = JSON.parse(snapshot()); const it = S.inv.find(i => i.id === id);
-    if (!it) return;
-    const after = before.filter(i => i.id !== id);
-    if (!await applyPantryTransition(before, after)) return;
-    closeSheet(); render();
-    toast(`Deleted ${esc(it.name)}`, () => { void restorePantrySnapshot(JSON.stringify(before)); }, 'trash');
+    try {
+      if (!it) return;
+      const after = before.filter(i => i.id !== id);
+      if (!await applyPantryTransition(before, after)) return;
+      closeSheet(); render();
+      toast(`Deleted ${esc(it.name)}`, () => { void restorePantrySnapshot(JSON.stringify(before)); }, 'trash');
+    } finally {
+      if (button?.isConnected) button.disabled = false;
+    }
   },
   closeSheet() { if (!recipeUseInFlight || !$('#scrim')?.querySelector('[data-act="useConfirm"]')) closeSheet(); },
 
@@ -4068,7 +4109,61 @@ phone.addEventListener('focusin', e => {
 });
 
 /* ---------- Event wiring ---------- */
+phone.addEventListener('pointerdown', e => {
+  cancelActiveSwipe();
+  // A new tap is separate from the synthetic click emitted by the last swipe.
+  suppressSwipeClick = null;
+  if (e.button !== 0 || S.auth !== 'app' || S.tab !== 'ing') return;
+  const main = e.target.closest?.('.swipe-item-main');
+  const row = main?.closest('.swipe-item');
+  if (!row || !phone.contains(row)) return;
+  swipeGesture = { pointerId: e.pointerId, row, startX: e.clientX, startY: e.clientY,
+    wasOpen: row.classList.contains('is-open'), horizontal: false };
+});
+phone.addEventListener('pointermove', e => {
+  const gesture = swipeGesture;
+  if (!gesture || e.pointerId !== gesture.pointerId || !gesture.row.isConnected) return;
+  const dx = e.clientX - gesture.startX, dy = e.clientY - gesture.startY;
+  if (!gesture.horizontal) {
+    if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { swipeGesture = null; return; }
+    if (Math.abs(dx) < 12 || Math.abs(dx) <= Math.abs(dy) * 1.2) return;
+    gesture.horizontal = true;
+    if (openSwipeRow && openSwipeRow !== gesture.row) closeSwipeRow();
+    gesture.row.classList.add('is-dragging');
+    gesture.row.querySelector('.swipe-delete').hidden = false;
+  }
+  if (e.cancelable) e.preventDefault();
+  const offset = Math.max(-SWIPE_ACTION_WIDTH, Math.min(0, (gesture.wasOpen ? -SWIPE_ACTION_WIDTH : 0) + dx));
+  gesture.row.style.setProperty('--swipe-x', `${offset}px`);
+});
+function finishSwipeGesture(e, cancelled = false) {
+  const gesture = swipeGesture;
+  if (!gesture || e.pointerId !== gesture.pointerId) return;
+  swipeGesture = null;
+  if (!gesture.horizontal || !gesture.row.isConnected) return;
+  const dx = e.clientX - gesture.startX;
+  const shouldOpen = cancelled ? gesture.wasOpen : gesture.wasOpen ? dx < 45 : dx < -45;
+  if (shouldOpen) revealSwipeRow(gesture.row);
+  else closeSwipeRow(gesture.row);
+  if (!cancelled) suppressSwipeClick = { row: gesture.row, until: Date.now() + 700 };
+}
+window.addEventListener('pointerup', e => finishSwipeGesture(e));
+window.addEventListener('pointercancel', e => finishSwipeGesture(e, true));
+window.addEventListener('blur', cancelActiveSwipe);
 phone.addEventListener('click', e => {
+  const row = e.target.closest?.('.swipe-item');
+  if (e.detail > 0 && row && suppressSwipeClick?.row === row && Date.now() < suppressSwipeClick.until) {
+    suppressSwipeClick = null;
+    e.preventDefault();
+    return;
+  }
+  if (openSwipeRow && !openSwipeRow.isConnected) openSwipeRow = null;
+  if (openSwipeRow && row === openSwipeRow && e.target.closest('.swipe-item-main') && e.detail > 0) {
+    closeSwipeRow();
+    e.preventDefault();
+    return;
+  }
+  if (openSwipeRow && row !== openSwipeRow) closeSwipeRow();
   const b = e.target.closest('[data-act]'); if (!b || !phone.contains(b)) return;
   const fn = ACT[b.dataset.act]; if (!fn) return;
   e.preventDefault();
@@ -4095,7 +4190,7 @@ phone.addEventListener('change', e => {
   }
 });
 phone.addEventListener('input', e => {
-  if (e.target.id === 'ingSearch') { S.ingQuery = e.target.value; $('#ingList').innerHTML = S.ingView === 'soon' ? renderSoon() : ingListHtml(); }
+  if (e.target.id === 'ingSearch') { resetSwipeInteraction(); S.ingQuery = e.target.value; $('#ingList').innerHTML = S.ingView === 'soon' ? renderSoon() : ingListHtml(); }
   if ((e.target.id === 'photoBrightness' || e.target.id === 'photoContrast') && S.scan?.editor) {
     S.scan.editor[e.target.id === 'photoBrightness' ? 'brightness' : 'contrast'] = Number(e.target.value);
     S.scan.editor.error = null; drawReceiptEditor();

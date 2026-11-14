@@ -14,7 +14,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 
 | Requirement | Status | Where to find it |
 | --- | --- | --- |
-| Add and manage food in the pantry, fridge, and freezer | Complete | Ingredients and Scan: manual entry, receipt photos, pantry photos, and UPC/EAN barcodes |
+| Add and manage food in the pantry, fridge, and freezer | Complete | Ingredients and Scan: manual entry, receipt photos, pantry photos, and UPC/EAN barcodes; swipe an ingredient left to reveal Delete |
 | Search food and see what needs attention soon | Complete | Ingredients → Going bad soon groups items by food category and sorts by date within each group |
 | Review dates and icons before saving scanned food | Complete | Scan review shows food icons and label dates when available; estimated dates are planning reminders |
 | Ask cooking questions and get pantry-aware recipe ideas | Complete | Pantry Pal on Home |
