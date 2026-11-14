@@ -1510,7 +1510,7 @@ function renderHome() {
       <button class="icon-btn" data-act="newChat" aria-label="Start a new chat">${ic('refresh')}</button></div>
     <div class="scroll" id="chatScroll"><div class="chat" id="chat" aria-live="polite">${S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join('')}</div></div>
     <div class="chips" aria-label="Suggestions"><button class="chip" data-act="deals">🛒 Shop ideas</button><button class="chip" data-act="aiRecipeUseStart">🍳 Log a recipe I made</button>${SUGGEST.map(s => `<button class="chip" data-act="ask" data-arg="${esc(s)}">${esc(s)}</button>`).join('')}</div>
-    <form class="composer" id="chatForm"><input class="input" id="chatIn" maxlength="2000" placeholder="Ask about your food or recipes…" autocomplete="off" aria-label="Message"><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
+    <form class="composer" id="chatForm"><textarea class="input" id="chatIn" rows="1" maxlength="2000" placeholder="Ask about your food or recipes…" aria-label="Message"></textarea><button class="send" type="submit" aria-label="Send">${ic('send')}</button></form>`;
 }
 function pushMsg(who, html) {
   ++chatRevision;
@@ -4381,7 +4381,34 @@ function bindForms() {
   }
 
   const cf = $('#chatForm');
-  if (cf) cf.addEventListener('submit', e => { e.preventDefault(); if (chatRequest) return; const i = $('#chatIn'); const v = i.value; i.value = ''; ask(v); });
+  if (cf) {
+    const input = cf.querySelector('#chatIn');
+    const resizeInput = () => {
+      const chatScroll = $('#chatScroll');
+      const atBottom = chatScroll && chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 24;
+      input.style.height = 'auto';
+      const style = getComputedStyle(input);
+      const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      const height = input.scrollHeight + border;
+      input.style.height = `${height}px`;
+      if (atBottom) chatScroll.scrollTop = chatScroll.scrollHeight;
+    };
+    resizeInput();
+    input.addEventListener('input', resizeInput);
+    input.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      cf.requestSubmit();
+    });
+    cf.addEventListener('submit', e => {
+      e.preventDefault();
+      if (chatRequest) return;
+      const value = input.value;
+      input.value = '';
+      resizeInput();
+      ask(value);
+    });
+  }
 }
 
 /* ---------- Authenticated demo tools ---------- */
