@@ -1,6 +1,6 @@
 # Pantry Pal AI chat
 
-The connected homepage calls the `pantry-chat` Supabase Edge Function. The AI reads the signed-in user's pantry and supports the last ten conversation messages. It cannot change inventory. Starting a new chat or changing accounts clears conversation context.
+The connected homepage calls the `pantry-chat` Supabase Edge Function. The AI reads the signed-in user's pantry and supports the last ten conversation messages. It cannot change inventory. Starting a new chat or changing accounts clears conversation context. Pantry Pal is restricted to MyPantry, pantry, recipe, cooking, storage, allergy, grocery-for-a-recipe, and food-waste topics. Responses use a strict structured scope classification; the Edge Function replaces out-of-scope output with a fixed limitation message. Recipe suggestions come from the published recipe catalog: complete pantry matches are ranked first by the soonest-dated food they use, followed by recipes for which the user owns a strict majority and is missing no more than two ingredients. Pantry items categorized as `Snacks` are excluded from recipe matching. Pantry Pal must disclose every missing item and call out included food that has a listed date within seven days.
 
 Backend setup:
 1. Apply `supabase/chat_quota.sql` once (already applied to MyPantry).

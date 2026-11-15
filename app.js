@@ -345,7 +345,9 @@ function freshState() {
     recipeUseEvents: [], recipeUseStatus: 'loading',
     foodAddedEvents: [], foodAddedStatus: 'loading', foodAddedMonth: null,
     ingView: 'all', ingCat: 'All', ingQuery: '',
-scan: null, setPage: null, reelView: 'feed', shopRecipeId: null, shopReturnTab: null,
+scan: null, setPage: null, reelView: 'feed', reelShown: 0, reelMore: false,
+reelScrollTop: 0, reelScrollId: null, reelScrollOffset: 0,
+reelMoreIntroSeen: false, reelMoreIntroVisible: false, shopRecipeId: null, shopReturnTab: null,
 profileDraft: null, profileCamera: null, profileError: null, profileLoading: false, profileSaving: false,
 allergyDraft: null, allergyError: null
   };
@@ -583,7 +585,10 @@ function persist() {
   if (S.auth === 'app') {
     try {
       sessionStorage.setItem(`${key}:navigation`, JSON.stringify({ tab: S.tab, ingView: S.ingView,
-        ingCat: S.ingCat, reelView: S.reelView, setPage: S.setPage }));
+        ingCat: S.ingCat, reelView: S.reelView, reelShown: S.reelShown, reelMore: S.reelMore,
+        reelScrollTop: S.reelScrollTop, reelScrollId: S.reelScrollId,
+        reelScrollOffset: S.reelScrollOffset, reelMoreIntroSeen: S.reelMoreIntroSeen,
+        setPage: S.setPage }));
     } catch (_) {}
   }
   try {
@@ -654,6 +659,12 @@ function hydrate() {
       if (['all', 'soon'].includes(nav.ingView)) S.ingView = nav.ingView;
       if (['All', ...CATS].includes(nav.ingCat)) S.ingCat = nav.ingCat;
       if (['feed', 'saved'].includes(nav.reelView)) S.reelView = nav.reelView;
+      if (Number.isFinite(nav.reelShown) && nav.reelShown >= 0) S.reelShown = nav.reelShown;
+      if (typeof nav.reelMore === 'boolean') S.reelMore = nav.reelMore;
+      if (Number.isFinite(nav.reelScrollTop) && nav.reelScrollTop >= 0) S.reelScrollTop = nav.reelScrollTop;
+      if (typeof nav.reelScrollId === 'string' || nav.reelScrollId === null) S.reelScrollId = nav.reelScrollId;
+      if (Number.isFinite(nav.reelScrollOffset)) S.reelScrollOffset = nav.reelScrollOffset;
+      if (typeof nav.reelMoreIntroSeen === 'boolean') S.reelMoreIntroSeen = nav.reelMoreIntroSeen;
       if (['deals', 'profile', 'allergies', 'username', 'password', 'email'].includes(nav.setPage)) S.setPage = nav.setPage;
     }
   } catch (_) {}
@@ -2986,7 +2997,7 @@ function rankReels() {
 function feedEntries(rank) {
   const extra = [...rank.near, ...rank.rest];
   if (!S.reelMore) return rank.can.length && extra.length ? [...rank.can, 'card:offer'] : [...rank.can];
-  return [...rank.can, ...(extra.length ? ['card:more', ...extra] : []), 'card:end'];
+  return [...rank.can, ...(extra.length ? [...(S.reelMoreIntroVisible ? ['card:more'] : []), ...extra] : []), 'card:end'];
 }
 function reelsUseDarkChrome() {
   if (S.tab !== 'reels' || S.reelView === 'saved') return false;
@@ -3089,8 +3100,30 @@ function reelHtml(r) {
   </article>`;
 }
 const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'K' : String(n);
+function rememberReelPosition(feed = $('#reelFeed')) {
+  if (!feed) return;
+  S.reelScrollTop = feed.scrollTop;
+  const reels = $$('.reel', feed);
+  if (!reels.length) { S.reelScrollId = null; S.reelScrollOffset = 0; return; }
+  let anchor = reels[0];
+  for (const reel of reels) {
+    if (Math.abs(reel.offsetTop - feed.scrollTop) < Math.abs(anchor.offsetTop - feed.scrollTop)) anchor = reel;
+  }
+  // The filter explanation is a one-time stop. If the user leaves while it is
+  // visible, resume on the first actual recipe instead of showing it again.
+  const skippedIntro = anchor.dataset.id === 'card-more' && anchor.nextElementSibling;
+  if (skippedIntro) anchor = anchor.nextElementSibling;
+  S.reelScrollId = anchor.dataset.id || null;
+  S.reelScrollOffset = skippedIntro ? 0 : feed.scrollTop - anchor.offsetTop;
+}
+function restoreReelPosition(feed) {
+  const anchor = S.reelScrollId && [...feed.querySelectorAll('.reel')]
+    .find(reel => reel.dataset.id === S.reelScrollId);
+  feed.scrollTop = anchor ? Math.max(0, anchor.offsetTop + (S.reelScrollOffset || 0)) : (S.reelScrollTop || 0);
+}
 function mountReels() {
   const feed = $('#reelFeed'); if (!feed) return;
+  restoreReelPosition(feed);
   const ctl = { active: null, t: {}, paused: false };
   const playActive = () => $$('.reel', feed).forEach(el => {
     const v = el.querySelector('.reel-video'); if (!v) return;
@@ -3113,6 +3146,8 @@ function mountReels() {
     $$('.reel', feed).slice(-next.length).forEach(r => ctl.io.observe(r));
   };
   feed.addEventListener('scroll', ctl.more, { passive: true });
+  ctl.remember = () => rememberReelPosition(feed);
+  feed.addEventListener('scroll', ctl.remember, { passive: true });
   ctl.playActive = playActive;
   ctl.timer = setInterval(() => {
     if (!ctl.active || ctl.paused || document.hidden) return;
@@ -3129,7 +3164,15 @@ function mountReels() {
   }, 100);
   reelCtl = ctl;
 }
-function unmountReels() { if (reelCtl) { clearInterval(reelCtl.timer); reelCtl.io.disconnect(); $('#reelFeed')?.removeEventListener('scroll', reelCtl.more); reelCtl = null; } }
+function unmountReels() {
+  if (!reelCtl) return;
+  const feed = $('#reelFeed');
+  rememberReelPosition(feed);
+  clearInterval(reelCtl.timer); reelCtl.io.disconnect();
+  feed?.removeEventListener('scroll', reelCtl.more);
+  feed?.removeEventListener('scroll', reelCtl.remember);
+  reelCtl = null;
+}
 
 function recipeSheet(r, source = 'reels') {
   const pantryReady = sync === 'synced';
@@ -3515,7 +3558,8 @@ const ACT = {
     S.shopReturnTab = null;
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') { S.reelView = 'feed'; S.reelShown = 0; S.reelMore = false; void loadLikeCounts(); }
+    if (arg === 'reels' && S.tab !== 'reels') void loadLikeCounts();
+    if (S.tab === 'reels' && arg !== 'reels') S.reelMoreIntroVisible = false;
     S.tab = arg; render();
   },
   receiptStatus() { S.tab = 'scan'; render(); },
@@ -3801,6 +3845,8 @@ const ACT = {
   reelMore(arg) {
     const on = arg !== 'off';
     const feed = $('#reelFeed'); const st = feed ? feed.scrollTop : 0;
+    S.reelMoreIntroVisible = on && !S.reelMoreIntroSeen;
+    if (S.reelMoreIntroVisible) S.reelMoreIntroSeen = true;
     S.reelMore = on; S.reelShown = on ? (S.reelShown || 0) + REEL_BATCH : 0; render();
     const f2 = $('#reelFeed'); if (!f2) return;
     if (!on) { f2.scrollTop = 0; return; }
