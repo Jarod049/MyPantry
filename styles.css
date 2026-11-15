@@ -1135,6 +1135,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .demo-toggle-button { display: flex; position: fixed; inset: calc(env(safe-area-inset-top, 0px) + 16px) 16px auto auto; z-index: 101; border-radius: 999px; background: var(--ink); color: var(--surface); border: 0; padding: 6px 12px; font-size: 12px; }
 
 @media (min-width: 650px) {
+  /* Keep the feed phone-sized, but align its header controls with Saved's
+     full-width header so switching views never moves the toggle. */
+  .reels:not(.saved-mode) .reels-top { width: 100vw; left: 50%; right: auto; transform: translateX(-50%); }
   .page-content > .scroll { padding-inline: 18px; }
   .page-home > .scroll { padding-inline: 0; }
   #ingList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px 4px; }
@@ -1163,6 +1166,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 }
 
 @media (min-width: 1000px) {
+  .reels:not(.saved-mode) .reels-top { width: calc(100vw - 208px); }
   #app:has(> .tabbar) { display: grid; grid-template-columns: 208px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   #app > .page-content { grid-column: 2; grid-row: 1; }
   #app > .tabbar { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; padding: 24px 14px; border-top: 0; border-right: 1px solid var(--line); }

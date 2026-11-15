@@ -932,6 +932,29 @@ test('with nothing makeable, Reels explains why and can show recipes needing mor
   assert.equal(ids[0], 'card-more');
   assert.ok(ids.length > 5);
 });
+test('Reels restores its filter and current reel after visiting another tab', async t => {
+  const f = boot({ id: 'reel-memory', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  Object.defineProperty(f.w.HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+    return this.classList?.contains('reel') ? [...this.parentElement.children].indexOf(this) * 100 : 0;
+  } });
+  f.click('[data-act="tab"][data-arg="reels"]');
+  f.click('[data-act="reelMore"][data-arg="on"]'); await tick();
+  const feed = f.w.document.querySelector('#reelFeed');
+  const target = [...feed.querySelectorAll('.reel:not(.reel-card)')][2];
+  assert.ok(target, 'there is a recipe to restore');
+  feed.scrollTop = target.offsetTop;
+  feed.dispatchEvent(new f.w.Event('scroll'));
+  const targetId = target.dataset.id;
+
+  f.click('[data-act="tab"][data-arg="home"]');
+  f.click('[data-act="tab"][data-arg="reels"]'); await tick();
+
+  const restored = f.w.document.querySelector('#reelFeed');
+  assert.ok(f.w.document.querySelector(`.reel[data-id="${targetId}"]`), 'the previous reel remains rendered');
+  assert.equal(restored.scrollTop, f.w.document.querySelector(`.reel[data-id="${targetId}"]`).offsetTop);
+  assert.ok(f.w.document.querySelector('[data-act="reelMore"][data-arg="off"]'), 'the expanded filter remains enabled');
+  assert.equal(f.w.document.querySelector('[data-id="card-more"]'), null, 'the one-time filter explanation is not shown again');
+});
 test('published recipes from Supabase are added to Reels', async t => {
   const tables = { recipe: [{ recipe_id: 'supa-toast', name: 'Supabase Toast', emoji: '🍞', cuisine: 'Breakfast', main_ingredient: 'bread',
     minutes: 5, serves: 1, base_likes: 9, background: null, keywords: [], ingredients: [{ m: 'bread', a: .1, label: '1 slice bread' }],
