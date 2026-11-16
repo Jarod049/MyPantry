@@ -12,6 +12,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   });
   const w = dom.window;
   let listener, saved = id ? { user: user(id), access_token: 'test-session' } : null;
+  let receiptAdjustmentWrites = 0;
   if (saved) saved.user.user_metadata = { ...saved.user.user_metadata, ...metadata };
   const queries = [];
   const mockTables = Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
@@ -25,7 +26,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   const canvasContext = () => ({
     filter: 'none', fillStyle: '', strokeStyle: '', lineWidth: 1,
     drawImage() {}, clearRect() {}, beginPath() {}, rect() {}, moveTo() {}, lineTo() {}, closePath() {}, fill() {}, stroke() {}, arc() {},
-    save() {}, restore() {}, clip() {}, setTransform() {}, translate() {}, rotate() {}, scale() {}, putImageData() {},
+    save() {}, restore() {}, clip() {}, setTransform() {}, translate() {}, rotate() {}, scale() {}, putImageData() { receiptAdjustmentWrites++; },
     getImageData(_x, _y, width, height) {
       const data = new Uint8ClampedArray(width * height * 4);
       for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -161,7 +162,7 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
   w.eval(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'));
   if (!noCatalog) w.eval(fs.readFileSync(path.join(root, 'recipes.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
-  return { dom, w, queries, mockTables, emit(event, id) { listener(event, id ? { user: user(id) } : null); },
+  return { dom, w, queries, mockTables, receiptAdjustmentWrites: () => receiptAdjustmentWrites, emit(event, id) { listener(event, id ? { user: user(id) } : null); },
     click(selector) { const el = w.document.querySelector(selector); assert.ok(el, selector); el.click(); },
     text: () => w.document.querySelector('#app').textContent,
     form(selector, values) { for (const [id, value] of Object.entries(values)) w.document.getElementById(id).value = value;
@@ -385,6 +386,20 @@ test('receipt editor offers correction tools and does not upload before approval
   assert.ok(f.w.document.querySelector('#photoContrast'));
   assert.ok(f.w.document.querySelector('[data-act="photoRotate"]'));
   assert.match(f.text(), /Drag each corner/);
+});
+test('receipt brightness and contrast sliders redraw adjusted pixels', async t => {
+  const f = boot({ id: 'alice', database: [] }); t.after(() => f.dom.window.close()); await tick();
+  f.click('[data-act="tab"][data-arg="scan"]'); f.click('[data-act="startScan"][data-arg="receipt"]');
+  receiptPhoto(f); await settle();
+  const brightness = f.w.document.querySelector('#photoBrightness');
+  brightness.value = '30'; brightness.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  await settle();
+  const brightnessWrites = f.receiptAdjustmentWrites();
+  assert.ok(brightnessWrites > 0);
+  const contrast = f.w.document.querySelector('#photoContrast');
+  contrast.value = '25'; contrast.dispatchEvent(new f.w.Event('input', { bubbles: true }));
+  await settle();
+  assert.ok(f.receiptAdjustmentWrites() > brightnessWrites);
 });
 test('unusable receipt photos are rejected locally without an upload', async t => {
   for (const [canvasQuality, message] of [['dark', /too dark/i], ['blurry', /too blurry/i]]) {
@@ -974,6 +989,7 @@ test('Going bad soon keeps the search bar and food categories and filters by the
   ];
   const f = boot({ id: 'soon-user', database }); t.after(() => f.dom.window.close()); await tick();
   f.click('[data-act="tab"][data-arg="ing"]'); await tick();
+  assert.ok(f.w.document.querySelector('#ingList > .ing-category-grid'), 'All items categories use the responsive grid without affecting page-level content');
   f.click('[data-act="ingView"][data-arg="soon"]'); await tick();
   const doc = f.w.document;
   assert.ok(doc.querySelector('#ingSearch'), 'search bar is shown');
@@ -981,6 +997,9 @@ test('Going bad soon keeps the search bar and food categories and filters by the
   const names = () => [...doc.querySelectorAll('#ingList .item .name')].map(n => n.textContent);
   assert.deepEqual(names(), ['Spinach', 'Milk'], 'only food going bad is listed, grouped by category');
   assert.deepEqual([...doc.querySelectorAll('#ingList .cat h2')].map(h => h.textContent), ['Vegetables', 'Dairy & Eggs']);
+  assert.ok(doc.querySelector('#ingList > .soon-overview'), 'summary and guidance stay in their own full-width section');
+  assert.ok(doc.querySelector('#ingList > .ing-category-grid'), 'food categories use a dedicated responsive grid');
+  assert.ok(doc.querySelector('#ingList > .soon-actions'), 'recipe action stays below the category grid');
   const search = doc.querySelector('#ingSearch');
   search.value = 'spin'; search.dispatchEvent(new f.w.Event('input', { bubbles: true }));
   assert.deepEqual(names(), ['Spinach']);

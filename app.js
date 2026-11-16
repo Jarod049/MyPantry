@@ -1989,10 +1989,10 @@ function ingListHtml() {
   const q = S.ingQuery.toLowerCase().trim();
   const items = filteredInv();
   if (!items.length) return `<div class="empty"><p>No food matches${q ? ` "${esc(q)}"` : ''}${S.ingCat !== 'All' ? ` in ${S.ingCat}` : ''}.</p></div>`;
-  return CATS.filter(c => items.some(i => i.cat === c)).map(c => {
+  return `<div class="ing-category-grid">${CATS.filter(c => items.some(i => i.cat === c)).map(c => {
     const list = items.filter(i => i.cat === c).sort(byExp);
     return `<section class="cat"><div class="cat-h"><h2>${c}</h2><span>${plural(list.length, 'item')}</span></div><div class="list">${list.map(itemRow).join('')}</div></section>`;
-  }).join('');
+  }).join('')}</div>`;
 }
 function renderSoon() {
   const anySoon = S.inv.some(i => daysLeft(i) <= 7);
@@ -2002,13 +2002,13 @@ function renderSoon() {
   const now = list.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 2).length;
   const wk = list.length - bad - now;
   if (!list.length) return `<div class="empty"><div class="big-illus">✅</div><h2>Nothing is going bad this week</h2><p>We'll move food here 7 days before it spoils.</p></div>`;
-  return `<div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Spoiled</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
-    <p class="soon-note">Grouped by food category, then sorted by date. Check package dates and storage instructions.</p>
-    ${CATS.filter(c => list.some(i => i.cat === c)).map(c => {
+  return `<div class="soon-overview"><div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Spoiled</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
+    <p class="soon-note">Grouped by food category, then sorted by date. Check package dates and storage instructions.</p></div>
+    <div class="ing-category-grid">${CATS.filter(c => list.some(i => i.cat === c)).map(c => {
       const items = list.filter(i => i.cat === c);
       return `<section class="cat"><div class="cat-h"><h2>${c}</h2><span>${plural(items.length, 'item')}</span></div><div class="list">${items.map(itemRow).join('')}</div></section>`;
-    }).join('')}
-    <div style="padding:14px 18px 0"><button class="btn btn-soft" data-act="askFromSoon">${ic('spark')} Find recipes that use these</button></div>`;
+    }).join('')}</div>
+    <div class="soon-actions"><button class="btn btn-soft" data-act="askFromSoon">${ic('spark')} Find recipes that use these</button></div>`;
 }
 
 /* ---------- Item form (edit / manual add / review edit) ---------- */
@@ -2515,6 +2515,7 @@ function photoItem(r) {
 }
 
 let receiptEditorImage = null;
+let receiptEditorDrawFrame = 0;
 const freshReceiptCorners = () => ([
   { x: .035, y: .035 }, { x: .965, y: .035 },
   { x: .965, y: .965 }, { x: .035, y: .965 }
@@ -2564,6 +2565,33 @@ function renderReceiptEditor(sc) {
   </div>`;
 }
 
+function applyReceiptAdjustments(ctx, width, height, brightness = 0, contrast = 0) {
+  brightness = Math.max(-40, Math.min(40, Number(brightness) || 0));
+  contrast = Math.max(-40, Math.min(40, Number(contrast) || 0));
+  if (!brightness && !contrast) return true;
+  try {
+    const imageData = ctx.getImageData(0, 0, width, height), pixels = imageData.data;
+    const brightnessFactor = 1 + brightness / 100, contrastFactor = 1 + contrast / 100;
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = (pixels[i] * brightnessFactor - 128) * contrastFactor + 128;
+      pixels[i + 1] = (pixels[i + 1] * brightnessFactor - 128) * contrastFactor + 128;
+      pixels[i + 2] = (pixels[i + 2] * brightnessFactor - 128) * contrastFactor + 128;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function scheduleReceiptEditorDraw() {
+  cancelAnimationFrame(receiptEditorDrawFrame);
+  receiptEditorDrawFrame = requestAnimationFrame(() => {
+    receiptEditorDrawFrame = 0;
+    drawReceiptEditor();
+  });
+}
+
 function drawReceiptEditor() {
   const canvas = $('#receiptEditorCanvas'), ed = S.scan?.editor, image = receiptEditorImage;
   if (!canvas || !ed || !image) return;
@@ -2572,8 +2600,8 @@ function drawReceiptEditor() {
   canvas.width = Math.max(1, Math.round(iw * scale)); canvas.height = Math.max(1, Math.round(ih * scale));
   const ctx = canvas.getContext('2d'); if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.filter = `brightness(${100 + Number(ed.brightness || 0)}%) contrast(${100 + Number(ed.contrast || 0)}%)`;
-  ctx.drawImage(image, 0, 0, canvas.width, canvas.height); ctx.filter = 'none';
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  applyReceiptAdjustments(ctx, canvas.width, canvas.height, ed.brightness, ed.contrast);
   const points = ed.corners.map(p => ({ x: p.x * canvas.width, y: p.y * canvas.height }));
   ctx.fillStyle = 'rgba(0,0,0,.42)'; ctx.beginPath(); ctx.rect(0, 0, canvas.width, canvas.height);
   ctx.moveTo(points[0].x, points[0].y); points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath(); ctx.fill('evenodd');
@@ -2637,7 +2665,6 @@ function rectifiedReceiptCanvas() {
   const scale = Math.min(1, 2200 / Math.max((top + bottom) / 2, (left + right) / 2));
   const canvas = document.createElement('canvas'); canvas.width = Math.max(320, Math.round((top + bottom) / 2 * scale)); canvas.height = Math.max(320, Math.round((left + right) / 2 * scale));
   const ctx = canvas.getContext('2d'); if (!ctx) throw new Error("Couldn't prepare that receipt photo.");
-  ctx.filter = `brightness(${100 + Number(ed.brightness || 0)}%) contrast(${100 + Number(ed.contrast || 0)}%)`;
   const cols = 12, rows = 16;
   for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
     const u0 = col / cols, u1 = (col + 1) / cols, v0 = row / rows, v1 = (row + 1) / rows;
@@ -2645,7 +2672,8 @@ function rectifiedReceiptCanvas() {
     const d00 = { x: u0 * canvas.width, y: v0 * canvas.height }, d10 = { x: u1 * canvas.width, y: v0 * canvas.height }, d01 = { x: u0 * canvas.width, y: v1 * canvas.height }, d11 = { x: u1 * canvas.width, y: v1 * canvas.height };
     triangleMap(ctx, image, [s00, s10, s11], [d00, d10, d11]); triangleMap(ctx, image, [s00, s11, s01], [d00, d11, d01]);
   }
-  ctx.filter = 'none'; return canvas;
+  applyReceiptAdjustments(ctx, canvas.width, canvas.height, ed.brightness, ed.contrast);
+  return canvas;
 }
 
 function receiptQuality(canvas) {
@@ -4239,7 +4267,7 @@ phone.addEventListener('input', e => {
   if (e.target.id === 'ingSearch') { resetSwipeInteraction(); S.ingQuery = e.target.value; $('#ingList').innerHTML = S.ingView === 'soon' ? renderSoon() : ingListHtml(); }
   if ((e.target.id === 'photoBrightness' || e.target.id === 'photoContrast') && S.scan?.editor) {
     S.scan.editor[e.target.id === 'photoBrightness' ? 'brightness' : 'contrast'] = Number(e.target.value);
-    S.scan.editor.error = null; drawReceiptEditor();
+    S.scan.editor.error = null; scheduleReceiptEditorDraw();
   }
 });
 

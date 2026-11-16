@@ -601,6 +601,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .summary-strip span { font-size: 11.5px; color: var(--ink-3); font-weight: 600; }
 .summary-strip .r b { color: var(--tomato); } .summary-strip .y b { color: var(--butter); }
 .soon-note { margin: 12px 18px 0; font-size: 13px; color: var(--ink-2); }
+.soon-actions { padding: 14px 18px 0; }
 
 /* Food waste summary and history */
 .waste-card {
@@ -787,6 +788,24 @@ label.shutter, label.cam-side { cursor: pointer; }
 .editor-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .editor-warning { display: flex; gap: 9px; align-items: flex-start; border-radius: 14px; padding: 12px; background: var(--tomato-soft); color: var(--ink); font-size: 13px; line-height: 1.4; }
 .editor-warning svg { width: 21px; height: 21px; flex: none; color: var(--tomato); }
+@media (max-width: 520px) {
+  .photo-editor { padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .editor-head { align-items: center; gap: 8px; margin-bottom: 8px; }
+  .editor-head h1 { font-size: 20px; }
+  .editor-head p { font-size: 11.5px; line-height: 1.25; }
+  #receiptEditorCanvas { max-height: min(34dvh, 310px); border-radius: 14px; }
+  .editor-tip { margin: 5px 0 8px; font-size: 11.5px; }
+  .editor-controls { gap: 8px; }
+  .editor-controls > label { gap: 3px; font-size: 12px; }
+  .range-ends { grid-template-columns: 42px minmax(0,1fr) 42px; gap: 5px; }
+  .range-ends input { min-height: 24px; margin: 0; }
+  .editor-actions { gap: 7px; }
+  .editor-controls .btn { min-height: 42px; padding-block: 9px; }
+}
+@media (max-width: 520px) and (max-height: 700px) {
+  .editor-head p { display: none; }
+  #receiptEditorCanvas { max-height: 30dvh; }
+}
 .barcode-number { display: grid; gap: 6px; }
 .barcode-number label { font-size: 12.5px; color: var(--ink-2); font-weight: 600; }
 .barcode-number > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
@@ -1140,8 +1159,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   .reels:not(.saved-mode) .reels-top { width: 100vw; left: 50%; right: auto; transform: translateX(-50%); }
   .page-content > .scroll { padding-inline: 18px; }
   .page-home > .scroll { padding-inline: 0; }
-  #ingList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px 4px; }
-  #ingList > .empty { grid-column: 1 / -1; }
+  .ing-category-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px 4px; }
+  .soon-overview { max-width: 760px; }
+  .soon-actions { width: min(100%, 520px); margin-inline: auto; }
   .cat .list { margin-inline: 10px; }
   .cat-h { padding-inline: 14px; }
   .cat-h h2 { font-size: 17px; }
@@ -1184,7 +1204,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   .toast { left: 240px; bottom: 24px; }
 }
 @media (min-width: 1500px) {
-  #ingList { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ing-category-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 380px) {
   .item { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 8px; padding-inline: 10px; }
