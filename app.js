@@ -344,6 +344,7 @@ function freshState() {
     chat: [], pending: null, undo: null, wasteEvents: [], wasteStatus: 'loading',
     recipeUseEvents: [], recipeUseStatus: 'loading',
     foodAddedEvents: [], foodAddedStatus: 'loading', foodAddedMonth: null,
+    adminAllowed: false, adminMetrics: null, adminMetricsStatus: 'idle', adminMetricsError: null,
     ingView: 'all', ingCat: 'All', ingQuery: '',
 scan: null, setPage: null, reelView: 'feed', reelShown: 0, reelMore: false,
 reelScrollTop: 0, reelScrollId: null, reelScrollOffset: 0,
@@ -374,6 +375,10 @@ let pantryRequest = 0;
 let wasteRequest = 0;
 let recipeUseRequest = 0;
 let foodAddedRequest = 0;
+let adminAccessRequest = 0;
+let adminMetricsRequest = 0;
+let adminRefreshTimer = null;
+let adminMetricsInFlight = null;
 let recipeUseInFlight = false;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
@@ -500,6 +505,67 @@ async function loadRecipeUseEvents() {
   }
   if (S.tab === 'ing') render();
   if ($('#recipeUseHistorySheet')) openSheet(recipeUseHistorySheet());
+}
+
+// Admin access and cross-account totals are both decided by database functions.
+// The browser never reads another account's event rows directly.
+async function loadAdminAccess() {
+  if (!sb || !S.user?.id) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++adminAccessRequest;
+  try {
+    const { data, error } = await sb.rpc('is_okr_admin');
+    if (generation !== accountGeneration || request !== adminAccessRequest || S.user?.id !== owner) return;
+    if (error) throw error;
+    S.adminAllowed = data === true;
+  } catch (error) {
+    if (generation !== accountGeneration || request !== adminAccessRequest || S.user?.id !== owner) return;
+    S.adminAllowed = false;
+    console.warn('[MyPantry] admin access check unavailable', error);
+  }
+  if (!S.adminAllowed) {
+    S.adminMetrics = null;
+    S.adminMetricsStatus = 'idle';
+    if (S.setPage === 'admin') S.setPage = null;
+  }
+  if (S.tab === 'settings') render();
+}
+
+async function loadAdminMetrics(silent = false) {
+  if (!sb || !S.user?.id || !S.adminAllowed || S.setPage !== 'admin') return;
+  if (adminMetricsInFlight?.owner === S.user.id && adminMetricsInFlight.generation === accountGeneration
+    && adminMetricsInFlight.request === adminMetricsRequest) return;
+  const owner = S.user.id, generation = accountGeneration, request = ++adminMetricsRequest;
+  const flight = { owner, generation, request };
+  adminMetricsInFlight = flight;
+  if (!silent || S.adminMetricsStatus !== 'synced') {
+    S.adminMetricsStatus = 'loading';
+    S.adminMetricsError = null;
+    render();
+  }
+  try {
+    const { data, error } = await sb.rpc('get_admin_okr_metrics');
+    if (generation !== accountGeneration || request !== adminMetricsRequest || S.user?.id !== owner || S.setPage !== 'admin') return;
+    if (error) throw error;
+    if (!data || !Array.isArray(data.monthly) || !Array.isArray(data.weekly)) throw new Error('The report is incomplete.');
+    S.adminMetrics = data;
+    S.adminMetricsStatus = 'synced';
+  } catch (error) {
+    if (generation !== accountGeneration || request !== adminMetricsRequest || S.user?.id !== owner || S.setPage !== 'admin') return;
+    if (error?.code === '42501') {
+      S.adminAllowed = false;
+      S.adminMetrics = null;
+      S.adminMetricsStatus = 'idle';
+      S.setPage = null;
+      render();
+      return;
+    }
+    S.adminMetricsStatus = 'error';
+    S.adminMetricsError = 'Couldn’t load the OKRs. Try again.';
+    console.error('[MyPantry] admin OKRs unavailable', error);
+  } finally {
+    if (adminMetricsInFlight === flight) adminMetricsInFlight = null;
+  }
+  render();
 }
 async function saveRecipeUseEvent(source, recipeName, recipeId = null, eventId = newUuid()) {
   const owner = S.user?.id, generation = accountGeneration;
@@ -930,6 +996,10 @@ async function endAppSession(reason = 'signed_out') {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.auth === 'app') {
     resumeAppSessionAfterVisibility();
+    if (S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed) void loadAdminMetrics(true);
+  } else if (adminRefreshTimer) {
+    clearTimeout(adminRefreshTimer);
+    adminRefreshTimer = null;
   }
 });
 
@@ -978,6 +1048,14 @@ function applySession(session, event) {
     if (S.user.avatarPath !== previousAvatarPath) S.user.avatarUrl = null;
   }
   S.user.pendingEmail = user.new_email || '';
+  if (!changed && previousEmail !== S.user.email) {
+    ++adminMetricsRequest;
+    S.adminAllowed = false;
+    S.adminMetrics = null;
+    S.adminMetricsStatus = 'idle';
+    if (S.setPage === 'admin') S.setPage = null;
+    void loadAdminAccess();
+  }
   if (event === 'USER_UPDATED' && (previousEmail !== user.email || previousAvatarPath !== S.user.avatarPath) && S.tab === 'settings') render();
   if (event === 'PASSWORD_RECOVERY') { S.auth = 'recovery'; render(); return; }
   // Refreshing a token or returning to the tab must not reset navigation or chat.
@@ -1368,6 +1446,11 @@ function render() {
 }
 function afterRender(scrollTop) {
   persist();
+  if (adminRefreshTimer) clearTimeout(adminRefreshTimer);
+  adminRefreshTimer = null;
+  if (S.auth === 'app' && S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed && !adminMetricsInFlight && document.visibilityState === 'visible') {
+    adminRefreshTimer = setTimeout(() => { adminRefreshTimer = null; void loadAdminMetrics(true); }, 60 * 1000);
+  }
   const sc = $('.scroll', app);
   if (sc && scrollTop) sc.scrollTop = scrollTop;
   if (S.auth === 'app' && S.tab === 'home') { const cs = $('#chatScroll'); if (cs) cs.scrollTop = cs.scrollHeight; }
@@ -3391,7 +3474,57 @@ function renderAllergySettings() {
       <button class="btn btn-ghost" data-act="allergyBack">Cancel</button>
     </div></div>`;
 }
+const adminCount = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '0';
+const adminRate = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
+const adminAverage = value => value === null || value === undefined ? '—' : Number(value).toFixed(2);
+function adminMonthLabel(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || '')
+    ? parseIso(value).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Unknown month';
+}
+function adminWeekLabel(start, endExclusive) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(endExclusive || '')) return 'Unknown week';
+  const end = parseIso(endExclusive); end.setDate(end.getDate() - 1);
+  return `${parseIso(start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+}
+function adminWasteAmounts(values) {
+  if (!Array.isArray(values) || !values.length) return '—';
+  return values.map(item => `${adminCount(item.quantity)} ${esc(item.measurement === 'ct' ? 'items' : item.measurement || 'units')}`).join(' · ');
+}
+function adminGoal(met, eligible, complete) {
+  if (!eligible) return '<span class="admin-goal empty">No eligible users</span>';
+  if (!complete) return `<span class="admin-goal ${met ? 'met' : 'progress'}">${met ? 'Goal reached' : 'In progress'}</span>`;
+  return `<span class="admin-goal ${met ? 'met' : 'miss'}">${met ? 'On target' : 'Below goal'}</span>`;
+}
+function renderAdminOkrs() {
+  const status = S.adminMetricsStatus;
+  let content = '';
+  if (status === 'loading') content = '<div class="admin-message" role="status">Loading OKRs…</div>';
+  else if (status === 'error') content = `<div class="admin-message" role="alert">${esc(S.adminMetricsError || 'Couldn’t load OKRs.')} <button class="link" data-act="adminRefresh">Try again</button></div>`;
+  else if (status === 'synced' && S.adminMetrics) {
+    const months = [...S.adminMetrics.monthly].sort((a, b) => String(a.month).localeCompare(String(b.month)));
+    const weeks = [...S.adminMetrics.weekly].sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)));
+    const month = months.at(-1) || {};
+    const week = weeks.at(-1) || {};
+    const eligible = Number(week.eligible_users) || 0;
+    const monthRows = months.slice().reverse().map(item => `<tr><th scope="row">${esc(adminMonthLabel(item.month))}</th><td>${adminCount(item.food_added_items)}</td><td>${adminCount(item.food_waste_events)}</td><td>${adminWasteAmounts(item.waste_quantities)}</td></tr>`).join('');
+    const weekRows = weeks.slice().reverse().map(item => `<tr><th scope="row">${esc(adminWeekLabel(item.week_start, item.week_end_exclusive))}${item.is_complete ? '' : ' · so far'}</th><td>${adminCount(item.active_users)} / ${adminCount(item.eligible_users)}</td><td>${adminRate(item.active_percent)}</td><td>${adminAverage(item.recipes_per_user)}</td><td>${adminRate(item.recipe_user_percent)}</td></tr>`).join('');
+    content = `<div class="admin-overview">
+      <article class="admin-okr"><span class="admin-okr-label">OKR 1 · Food added</span><strong>${adminCount(month.food_added_items)}</strong><span>items entered in ${esc(adminMonthLabel(month.month))}</span><small>One confirmed pantry addition counts as one item.</small></article>
+      <article class="admin-okr"><span class="admin-okr-label">OKR 2 · Food waste</span><strong class="admin-waste-total">${Number(month.food_waste_events) ? adminWasteAmounts(month.waste_quantities) : 'No waste logged'}</strong><span>${adminCount(month.food_waste_events)} waste reports in ${esc(adminMonthLabel(month.month))}</span><small>Amounts stay separated by unit.</small></article>
+      <article class="admin-okr"><span class="admin-okr-label">OKR 3 · Weekly app use · so far</span><strong>${adminRate(week.active_percent)}</strong><span>${adminCount(week.active_users)} of ${adminCount(week.eligible_users)} users · goal 80%</span>${adminGoal(week.meets_80_percent, eligible, week.is_complete)}</article>
+      <article class="admin-okr"><span class="admin-okr-label">OKR 4 · Weekly recipes · so far</span><strong>${adminRate(week.recipe_user_percent)}</strong><span>${adminCount(week.recipe_users)} of ${adminCount(week.eligible_users)} users · goal 20%</span><small>Average ${adminAverage(week.recipes_per_user)} recipes used per user</small>${adminGoal(week.meets_20_percent, eligible, week.is_complete)}</article>
+    </div>
+    <section class="admin-section"><div class="admin-section-head"><h2>Monthly food activity</h2><p>Current month and the preceding 11 months. Waste quantities stay separated by unit.</p></div>
+      <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Month</th><th scope="col">Items added</th><th scope="col">Waste reports</th><th scope="col">Amount wasted</th></tr></thead><tbody>${monthRows}</tbody></table></div></section>
+    <section class="admin-section"><div class="admin-section-head"><h2>Weekly activity</h2><p>This week so far includes all confirmed accounts to date. The eight completed Mountain Time weeks use accounts confirmed before each week began.</p></div>
+      <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Week</th><th scope="col">App users</th><th scope="col">App use</th><th scope="col">Recipes / user</th><th scope="col">Recipe users</th></tr></thead><tbody>${weekRows}</tbody></table></div></section>
+    <p class="admin-note">These totals begin when each tracker was introduced; older activity was not backfilled. App use counts recorded session starts. Recipe use counts recipes people confirmed they made from Reels or Pantry Pal.</p>`;
+  }
+  return `<div class="appbar"><button class="back" data-act="adminBack">${ic('left')} Settings</button><button class="admin-refresh" data-act="adminRefresh" ${status === 'loading' ? 'disabled' : ''}>Refresh</button></div>
+    <div class="scroll"><main class="admin-dashboard"><div class="admin-heading"><h1>Admin OKRs</h1><p>MyPantry activity across all accounts</p></div>${content}</main></div>`;
+}
 function renderSettings() {
+  if (S.setPage === 'admin' && S.adminAllowed) return renderAdminOkrs();
   if (S.setPage === 'profile') return renderProfileSettings();
   if (S.setPage === 'allergies') return renderAllergySettings();
   if (['username', 'password', 'email'].includes(S.setPage)) return renderAccountSettings(S.setPage);
@@ -3416,6 +3549,7 @@ function renderSettings() {
     <div class="set-group"><span class="lbl">Pantry</span><div class="set-card">
       ${row('refresh', 'var(--tomato-soft)', 'var(--tomato)', '<span style="color:var(--tomato)">Reset inventory</span>', 'Remove all food and reset Reels', chev, 'resetAsk')}
     </div></div>
+    ${S.adminAllowed ? `<div class="set-group"><span class="lbl">Administration</span><div class="set-card">${row('list', 'var(--basil-soft)', 'var(--basil)', 'Admin OKRs', 'Food, waste, weekly use, and recipes', chev, 'openAdmin')}</div></div>` : ''}
     <div class="set-group"><span class="lbl">Account</span><div class="set-card">
       ${row('pencil', 'var(--surface-3)', 'var(--ink-2)', 'Change username', null, chev, 'changeUsername')}
       ${row('mail', 'var(--surface-3)', 'var(--ink-2)', 'Change email', null, chev, 'changeEmail')}
@@ -3586,6 +3720,12 @@ const ACT = {
   tab(arg) {
     closeSheet();
     S.shopReturnTab = null;
+    if (S.setPage === 'admin' && arg !== 'settings') {
+      ++adminMetricsRequest;
+      S.setPage = null;
+      S.adminMetrics = null;
+      S.adminMetricsStatus = 'idle';
+    }
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
     if (arg === 'reels' && S.tab !== 'reels') void loadLikeCounts();
@@ -3984,6 +4124,14 @@ const ACT = {
   storeSheet() {
     openSheet(storeSheet());
   },
+  openAdmin() {
+    if (!S.adminAllowed || !S.user?.id) return;
+    S.setPage = 'admin';
+    S.adminMetrics = null;
+    void loadAdminMetrics();
+  },
+  adminRefresh() { if (S.adminAllowed && S.setPage === 'admin') void loadAdminMetrics(); },
+  adminBack() { ++adminMetricsRequest; S.setPage = null; S.adminMetrics = null; S.adminMetricsStatus = 'idle'; render(); },
   openTheme() { openSheet(themeSheet()); },
   themePick(arg) {
     const theme = normalizeTheme(arg);
@@ -4157,6 +4305,7 @@ function enterApp() {
   if (S.user.avatarPath) void loadAvatarUrl(S.user.id, S.user.avatarPath);
   startAppSessionTracking();
   loadPantry(); loadWasteEvents(); loadRecipeUseEvents(); loadFoodAddedEvents(); loadUserAppState(); loadChatHistory(); void loadLikeCounts(true);
+  void loadAdminAccess();
 }
 
 /* ---------- On-screen keyboard handling ----------
