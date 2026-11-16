@@ -17,8 +17,8 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 | Add and manage food in the pantry, fridge, and freezer | Complete | Ingredients and Scan: manual entry, receipt photos, pantry photos, and UPC/EAN barcodes; swipe an ingredient left to reveal Delete |
 | Search food and see what needs attention soon | Complete | Ingredients → Going bad soon groups items by food category and sorts by date within each group |
 | Review dates and icons before saving scanned food | Complete | Scan review shows food icons and label dates when available; estimated dates are planning reminders |
-| Ask cooking questions and get pantry-aware recipe ideas | Complete | Pantry Pal on Home |
-| Remove food through chat only when requested | Complete | Ask “Remove Apples from my pantry” and confirm the exact match |
+| Ask cooking questions and get pantry-aware recipe ideas | Complete | Pantry Pal on Home; the message box grows as your prompt wraps |
+| Remove food through chat only when requested | Complete | Ask “remove my bananas” and confirm the matching item |
 | Find, save, and like recipes | Complete | Reels shows makeable recipes first and lets users opt in to recipes needing more ingredients |
 | Track recipes made and food thrown away | Complete | Ingredients shows recipe-use and food-waste history |
 | Track food added by month and all time | Complete | Ingredients shows monthly additions and an all-time count since tracking began |
@@ -79,6 +79,7 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - Sign in as a second account: neither the first account's pantry, recipe activity, settings, nor chat history appear.
 - Test the password-reset email and save a new password.
 - Test again with browser storage unavailable and with a network failure; errors should be visible.
+- With one Bananas entry in Ingredients, ask Pantry Pal to “remove my bananas.” Cancel once to verify the item stays, then repeat and confirm to verify it disappears.
 
 Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed shows recipes you can make now. Select **Show recipes that need more ingredients** to see additional recipes with their missing ingredients.
 
@@ -104,6 +105,6 @@ Pantry data and account-specific state sync through Supabase after the follow-up
 | Classify meat snacks separately from raw meat | Recognized meat sticks and jerky receive a planning reminder when no package date is available. Follow the package label and storage directions. |
 | Show recognizable icons for scanned food | Match full food names and common plurals; use the neutral icon when there is no reliable match. |
 | Group Going bad soon by category | Keep the existing search and filters, and sort items by date within their food categories. |
-| Remove an ingredient from chat only when asked | Type an explicit command such as “Remove Apples from my pantry.” A unique exact match opens a confirmation. Ambiguous names direct the user to Ingredients. |
+| Remove an ingredient from chat only when asked | Type an explicit command such as “remove my bananas” or “Remove Bananas from my pantry.” Pantry Pal checks the saved name, then retries without a leading “my” or “the.” A single match opens a confirmation; duplicate names direct you to Ingredients. |
 
 To see OKR #3, open **Supabase → SQL Editor → New query**, paste the linked report, and select **Run**. Read `active_percent` and `meets_80_percent`. This measures app opens through session starts; it does not measure feature usage.
