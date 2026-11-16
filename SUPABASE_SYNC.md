@@ -97,6 +97,25 @@ migration.
    reload. Check two accounts to confirm they cannot see each other's records
    or photos.
 
+## Admin OKR dashboard
+
+Apply `supabase/migrations/20261116_admin_okr_dashboard.sql` after the food
+addition, waste, app session, and recipe-use migrations, and before deploying
+the admin dashboard website. The confirmed `rgardanier@gmail.com` Auth account
+must already exist; the migration stops without changing the database if it
+cannot pin that exact account. No secret key is added to the browser. The
+dashboard's two database functions check the pinned Auth ID and current
+confirmed email. Other accounts cannot read the cross-account totals.
+
+Settings → Admin OKRs shows the current month and eleven earlier months of
+confirmed food additions and logged waste amounts, separated by unit. It also
+shows the last eight completed Mountain Time weeks of recorded app sessions and
+recipe use. The 80% app goal and 20% recipe goal use confirmed, nonanonymous
+accounts created before each week began. The recipe goal is the share of those
+accounts that logged at least one made recipe; the page also shows the average
+number of logged recipes per eligible account. These event histories begin when
+their trackers were introduced; older activity was not backfilled.
+
 Food waste is recorded only when a user explicitly logs it. An expired date or
 an ordinary ingredient deletion does not count as waste. Waste reports retain
 the ingredient's unit; totals with incompatible units such as pounds, gallons,
