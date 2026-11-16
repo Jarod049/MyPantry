@@ -11,7 +11,7 @@ USDA Food Safety and Inspection Service publishes the English FoodKeeper JSON th
 
 The date calculation uses the lower end of a numeric FoodKeeper range in days, weeks, months, or years. Hour-based guidance cannot be represented safely by a calendar date, so it returns no date. It also returns no date for guidance such as “Package use-by date,” “Indefinitely,” “When Ripe,” or “Not Recommended.” The response still includes that guidance in `basis`. If `opened_on` is given, the record must have a numeric after-opening duration for that storage location; otherwise the function returns no date. An opened-food date never extends a shorter date calculated from acquisition. FoodKeeper has no after-opening freezer field, so an opened freezer item has no catalog estimate.
 
-`acquired_on` is the date the item was bought or brought home. For freezer items, this estimate assumes it was frozen then. When the actual purchase, opening, or freezing date is unknown, the caller should make that assumption clear and let the user correct the date. FoodKeeper guidance is about storage quality and cannot establish whether a particular item is safe to eat.
+`acquired_on` is the date the item was bought or brought home. For freezer items, this estimate assumes it was frozen then. The function requires a known acquisition date; callers should ask for one or let the user provide their own check-by date when it is unknown. New manual entries and receipts may default to today, but pantry photos must not silently use today for food that may have been stored earlier. FoodKeeper guidance is about storage quality and cannot establish whether a particular item is safe to eat.
 
 ## API
 

@@ -421,8 +421,15 @@ function basicDateEstimate(item) {
 async function estimateItemsWithAI(items) {
   const candidates = items.filter(item => item.src === 'ai');
   if (!candidates.length) return;
-  if (!sb) { candidates.forEach(basicDateEstimate); return; }
-  candidates.forEach(item => {
+  candidates.filter(item => !validIsoDate(item.acquiredOn)).forEach(item => {
+    item.exp = null;
+    item.dateNeedsReview = true;
+    item.estimateBasis = 'Add when this food was bought or prepared to estimate a date, or enter a package or personal check-by date.';
+  });
+  const anchored = candidates.filter(item => validIsoDate(item.acquiredOn));
+  if (!anchored.length) return;
+  if (!sb) { anchored.forEach(basicDateEstimate); return; }
+  anchored.forEach(item => {
     item.exp = null;
     item.dateNeedsReview = true;
     item.estimateBasis = 'No reliable date yet. Enter a package date or your own check-by date.';
@@ -432,11 +439,11 @@ async function estimateItemsWithAI(items) {
   try {
     const { data, error } = await sb.auth.getSession();
     if (error || !data.session?.access_token) throw new Error('Sign in again to estimate dates.');
-    for (let start = 0; start < candidates.length; start += 30) {
-      const batch = candidates.slice(start, start + 30);
+    for (let start = 0; start < anchored.length; start += 30) {
+      const batch = anchored.slice(start, start + 30);
       const snapshots = batch.map(item => ({ item, version: item.dateEstimateSeq || 0, key: newUuid(), name: item.name, brand: item.brand || '',
         product_name: item.productName || '', category: item.cat, storage: item.store,
-        acquired_on: item.acquiredOn || todayIso(), opened_on: item.openedOn || null }));
+        acquired_on: item.acquiredOn, opened_on: item.openedOn || null }));
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 70000);
       let response;
@@ -2122,6 +2129,7 @@ function itemIdentityFromForm(previous) {
 function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
+  const defaultAcquired = mode === 'new' || (mode === 'reviewNew' && S.scan?.mode !== 'pantry') ? todayIso() : '';
   const title = mode === 'new' ? 'Enter item details' : mode === 'review' && S.scan?.mode === 'barcode' ? 'Does this look right?' : mode === 'review' ? 'Edit detected item' : 'Edit item';
   const srcNote = it.src === 'label' ? `${ic('tag')}<span>This date was read from the package. Check the exact wording on its label.</span>`
     : it.src === 'user' ? `${ic('tag')}<span>You entered this date.</span>`
@@ -2152,11 +2160,12 @@ function itemForm(it, mode) {
     <div class="field"><label for="f_cat">Food category</label><select class="input" id="f_cat">${CATS.map(c => `<option ${c === (it.cat || 'Other') ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><span class="lbl">Stored in</span><div class="store-sel" id="f_store" role="radiogroup">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button type="button" role="radio" aria-checked="${s === (it.store || 'Fridge')}" class="${s === (it.store || 'Fridge') ? 'on' : ''}" data-store="${s}" style="flex:1;padding:8px">${s}</button>`).join('')}</div></div>
     <div class="row2">
-      <div class="field"><label for="f_acquired">Bought or prepared (optional)</label><input class="input" id="f_acquired" type="date" max="${todayIso()}" value="${esc(it.acquiredOn ?? (mode === 'new' || mode === 'reviewNew' ? todayIso() : ''))}"></div>
+      <div class="field"><label for="f_acquired">Bought or prepared (optional)</label><input class="input" id="f_acquired" type="date" max="${todayIso()}" value="${esc(it.acquiredOn ?? defaultAcquired)}"></div>
       <div class="field"><label for="f_opened">Opened (optional)</label><input class="input" id="f_opened" type="date" max="${todayIso()}" value="${esc(it.openedOn || '')}"></div>
     </div>
     <span class="field-err" id="f_datesErr" hidden>Check these dates. They cannot be in the future, and opened cannot be before bought or prepared.</span>
     <div class="field"><label for="f_exp">Check-by date (optional)</label><input class="input" id="f_exp" type="date" data-orig="${esc(it.exp || '')}" value="${esc(it.exp || '')}"><span class="field-err" id="f_expErr" hidden>Enter a valid date or leave it blank for an estimate.</span></div>
+    <div class="est-note" id="f_openedGuidance" ${it.openedOn && it.exp ? '' : 'hidden'}>Opening can shorten how long food keeps. Check the package's after-opening instructions and adjust the check-by date if needed.</div>
     <div class="est-note">${srcNote}</div>
     ${mode === 'edit' && it.src === 'ai' && !it.acquiredOn ? '<div class="est-note">For older items, add when you bought or prepared them. Saving will refresh the estimate.</div>' : ''}
   </form>
@@ -2187,6 +2196,7 @@ function openItemForm(it, mode) {
     const expBad = !!exp.value && !validIsoDate(exp.value);
     exp.classList.toggle('bad', expBad);
     $('#f_expErr').hidden = !expBad;
+    $('#f_openedGuidance').hidden = !(opened.value && exp.value);
   };
   [exp, acquired, opened].forEach(el => { el.addEventListener('input', checkDates); el.addEventListener('change', checkDates); });
   $$('#f_store button').forEach(b => b.onclick = () => {
@@ -2236,16 +2246,11 @@ function readItemForm() {
   }
   const sameDate = !!previous && expIn === previous.exp;
   const src = expIn ? (sameDate ? previous.src : 'user') : 'ai';
-  if (src === 'ai' && openedOn && !acquiredOn) {
-    $('#f_datesErr').textContent = 'Add when you bought or prepared this food to use its opened date in an estimate.';
-    $('#f_datesErr').hidden = false; $('#f_acquired').classList.add('bad'); $('#f_acquired').focus();
-    return null;
-  }
   const changedForEstimate = !previous || !sameDate || name !== previous.name || brand !== (previous.brand || '')
     || productName !== (previous.productName || '') || cat !== previous.cat || store !== previous.store
     || acquiredOn !== (previous.acquiredOn || null) || openedOn !== (previous.openedOn || null);
-  if (src === 'ai' && changedForEstimate && form.dataset.mode === 'edit' && !acquiredOn) {
-    $('#f_datesErr').textContent = 'Add when you bought or prepared this food to update its estimate.';
+  if (src === 'ai' && changedForEstimate && !acquiredOn) {
+    $('#f_datesErr').textContent = 'Add when you bought or prepared this food for an estimate, or enter a check-by date yourself.';
     $('#f_datesErr').hidden = false; $('#f_acquired').classList.add('bad'); $('#f_acquired').focus();
     return null;
   }
@@ -2618,7 +2623,7 @@ async function photoImage(file) {
     reader.readAsDataURL(file);
   });
 }
-function photoItem(r) {
+function photoItem(r, mode) {
   const brand = String(r.brand || '').trim();
   const productName = String(r.product_name || '').trim();
   const name = composeItemName(String(r.name || '').trim(), brand, productName);
@@ -2627,10 +2632,11 @@ function photoItem(r) {
   const qty = Number(r.quantity) > 0 ? Number(r.quantity) : 1;
   // Keep a legible package date distinct from any estimated check date.
   const label = validIsoDate(r.label_date) ? r.label_date : null;
+  const acquiredOn = mode === 'receipt' ? todayIso() : null;
   return { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat,
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
-    acquiredOn: todayIso(), openedOn: null, estimateBasis: label ? null : BASIC_DATE_BASIS,
-    exp: label || estimate(cat, store, name), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
+    acquiredOn, openedOn: null, estimateBasis: label ? null : BASIC_DATE_BASIS,
+    exp: label, on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
 }
 
 let receiptEditorImage = null;
@@ -2880,7 +2886,7 @@ async function scanPhoto(file, diagnostics = {}) {
     console.info('[MyPantry] receipt scan finished', { totalMs: Math.round(performance.now() - requestStarted), serverTiming, code: result.code || (response.ok ? 'OK' : 'UNKNOWN'), ...diagnostics });
     if (!response.ok) throw new Error(result.error || 'Photo scanning is unavailable. Please try again.');
     if (!current()) return;
-    const found = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(photoItem);
+    const found = (Array.isArray(result.items) ? result.items : []).filter(r => r && r.name).map(r => photoItem(r, sc.mode));
     const items = sc.mode === 'pantry' ? combinePhotoPackages(found) : found;
     if (!items.length) {
       fail(result.readable === false ? t.bad : t.none);
