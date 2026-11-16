@@ -1091,16 +1091,16 @@ test('an existing item with a passed date keeps it, but a new past date is rejec
 
 test('chat deletion requires confirmation and only deletes the matching owned row', async t => {
   const database = [
-    pantryRow(1, 'Apples', 2, 'ct', 'alice'),
-    pantryRow(2, 'Apples', 1, 'ct', 'bob')
+    pantryRow(1, 'Bananas', 2, 'ct', 'alice'),
+    pantryRow(2, 'Bananas', 1, 'ct', 'bob')
   ];
   const f = boot({ id: 'alice', database }); t.after(() => f.dom.window.close()); await tick();
-  f.form('#chatForm', { chatIn: 'Please remove Apples from my pantry.' });
+  f.form('#chatForm', { chatIn: 'Please remove Bananas from my pantry.' });
   assert.equal(database.length, 2);
   f.click('#scrim [data-act="closeSheet"]');
   assert.equal(database.length, 2);
-  f.form('#chatForm', { chatIn: 'Delete Apples' });
+  f.form('#chatForm', { chatIn: 'remove my bananas' });
   f.click('[data-act="chatRemoveConfirm"]'); await tick();
   assert.deepEqual(database.map(r => r.auth_user_id), ['bob']);
-  assert.match(f.text(), /Removed Apples/);
+  assert.match(f.text(), /Removed Bananas/);
 });
