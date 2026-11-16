@@ -1544,10 +1544,12 @@ function chatTextFromHtml(html) {
 }
 function pantryRemovalTarget(text) {
   const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(.+?)(?:\s+from\s+(?:my|the)\s+(?:pantry|inventory|ingredients))?[.!]?$/i);
-  return match ? match[1].replace(/^the\s+/i, '').trim() : null;
+  return match ? match[1].trim() : null;
 }
 function proposeChatRemoval(target) {
-  const items = S.inv.filter(i => i.name.trim().toLowerCase() === target.toLowerCase());
+  const findExact = name => S.inv.filter(i => i.name.trim().toLowerCase() === name.toLowerCase());
+  const exact = findExact(target);
+  const items = exact.length ? exact : findExact(target.replace(/^(?:my|the)\s+/i, ''));
   if (!items.length) {
     pushMsg('bot', '<p>I couldn’t find an exact match. Use the full item name shown in Ingredients.</p>');
     return;
