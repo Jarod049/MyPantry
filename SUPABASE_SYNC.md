@@ -109,8 +109,10 @@ confirmed email. Other accounts cannot read the cross-account totals.
 
 Settings → Admin OKRs shows the current month and eleven earlier months of
 confirmed food additions and logged waste amounts, separated by unit. It also
-shows the last eight completed Mountain Time weeks of recorded app sessions and
-recipe use. The 80% app goal and 20% recipe goal use confirmed, nonanonymous
+shows this week so far and the last eight completed Mountain Time weeks of
+recorded app sessions and recipe use. While open and visible, the page refreshes
+from Supabase every minute; returning to the page or selecting Refresh also
+reloads the totals. The 80% app goal and 20% recipe goal use confirmed, nonanonymous
 accounts created before each week began. The recipe goal is the share of those
 accounts that logged at least one made recipe; the page also shows the average
 number of logged recipes per eligible account. These event histories begin when

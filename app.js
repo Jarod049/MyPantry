@@ -377,6 +377,7 @@ let recipeUseRequest = 0;
 let foodAddedRequest = 0;
 let adminAccessRequest = 0;
 let adminMetricsRequest = 0;
+let adminRefreshTimer = null;
 let recipeUseInFlight = false;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
@@ -528,12 +529,14 @@ async function loadAdminAccess() {
   if (S.tab === 'settings') render();
 }
 
-async function loadAdminMetrics() {
+async function loadAdminMetrics(silent = false) {
   if (!sb || !S.user?.id || !S.adminAllowed || S.setPage !== 'admin') return;
   const owner = S.user.id, generation = accountGeneration, request = ++adminMetricsRequest;
-  S.adminMetricsStatus = 'loading';
-  S.adminMetricsError = null;
-  render();
+  if (!silent || S.adminMetricsStatus !== 'synced') {
+    S.adminMetricsStatus = 'loading';
+    S.adminMetricsError = null;
+    render();
+  }
   try {
     const { data, error } = await sb.rpc('get_admin_okr_metrics');
     if (generation !== accountGeneration || request !== adminMetricsRequest || S.user?.id !== owner || S.setPage !== 'admin') return;
@@ -986,6 +989,10 @@ async function endAppSession(reason = 'signed_out') {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.auth === 'app') {
     resumeAppSessionAfterVisibility();
+    if (S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed) void loadAdminMetrics(true);
+  } else if (adminRefreshTimer) {
+    clearTimeout(adminRefreshTimer);
+    adminRefreshTimer = null;
   }
 });
 
@@ -1432,6 +1439,11 @@ function render() {
 }
 function afterRender(scrollTop) {
   persist();
+  if (adminRefreshTimer) clearTimeout(adminRefreshTimer);
+  adminRefreshTimer = null;
+  if (S.auth === 'app' && S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed && document.visibilityState === 'visible') {
+    adminRefreshTimer = setTimeout(() => { adminRefreshTimer = null; void loadAdminMetrics(true); }, 60 * 1000);
+  }
   const sc = $('.scroll', app);
   if (sc && scrollTop) sc.scrollTop = scrollTop;
   if (S.auth === 'app' && S.tab === 'home') { const cs = $('#chatScroll'); if (cs) cs.scrollTop = cs.scrollHeight; }
@@ -3471,8 +3483,9 @@ function adminWasteAmounts(values) {
   if (!Array.isArray(values) || !values.length) return '—';
   return values.map(item => `${adminCount(item.quantity)} ${esc(item.measurement === 'ct' ? 'items' : item.measurement || 'units')}`).join(' · ');
 }
-function adminGoal(met, eligible) {
+function adminGoal(met, eligible, complete) {
   if (!eligible) return '<span class="admin-goal empty">No eligible users</span>';
+  if (!complete) return `<span class="admin-goal ${met ? 'met' : 'progress'}">${met ? 'Goal reached' : 'In progress'}</span>`;
   return `<span class="admin-goal ${met ? 'met' : 'miss'}">${met ? 'On target' : 'Below goal'}</span>`;
 }
 function renderAdminOkrs() {
@@ -3487,16 +3500,16 @@ function renderAdminOkrs() {
     const week = weeks.at(-1) || {};
     const eligible = Number(week.eligible_users) || 0;
     const monthRows = months.slice().reverse().map(item => `<tr><th scope="row">${esc(adminMonthLabel(item.month))}</th><td>${adminCount(item.food_added_items)}</td><td>${adminCount(item.food_waste_events)}</td><td>${adminWasteAmounts(item.waste_quantities)}</td></tr>`).join('');
-    const weekRows = weeks.slice().reverse().map(item => `<tr><th scope="row">${esc(adminWeekLabel(item.week_start, item.week_end_exclusive))}</th><td>${adminCount(item.active_users)} / ${adminCount(item.eligible_users)}</td><td>${adminRate(item.active_percent)}</td><td>${adminAverage(item.recipes_per_user)}</td><td>${adminRate(item.recipe_user_percent)}</td></tr>`).join('');
+    const weekRows = weeks.slice().reverse().map(item => `<tr><th scope="row">${esc(adminWeekLabel(item.week_start, item.week_end_exclusive))}${item.is_complete ? '' : ' · so far'}</th><td>${adminCount(item.active_users)} / ${adminCount(item.eligible_users)}</td><td>${adminRate(item.active_percent)}</td><td>${adminAverage(item.recipes_per_user)}</td><td>${adminRate(item.recipe_user_percent)}</td></tr>`).join('');
     content = `<div class="admin-overview">
       <article class="admin-okr"><span class="admin-okr-label">OKR 1 · Food added</span><strong>${adminCount(month.food_added_items)}</strong><span>items entered in ${esc(adminMonthLabel(month.month))}</span><small>One confirmed pantry addition counts as one item.</small></article>
       <article class="admin-okr"><span class="admin-okr-label">OKR 2 · Food waste</span><strong class="admin-waste-total">${Number(month.food_waste_events) ? adminWasteAmounts(month.waste_quantities) : 'No waste logged'}</strong><span>${adminCount(month.food_waste_events)} waste reports in ${esc(adminMonthLabel(month.month))}</span><small>Amounts stay separated by unit.</small></article>
-      <article class="admin-okr"><span class="admin-okr-label">OKR 3 · Weekly app use</span><strong>${adminRate(week.active_percent)}</strong><span>${adminCount(week.active_users)} of ${adminCount(week.eligible_users)} users · goal 80%</span>${adminGoal(week.meets_80_percent, eligible)}</article>
-      <article class="admin-okr"><span class="admin-okr-label">OKR 4 · Weekly recipes</span><strong>${adminRate(week.recipe_user_percent)}</strong><span>${adminCount(week.recipe_users)} of ${adminCount(week.eligible_users)} users · goal 20%</span><small>Average ${adminAverage(week.recipes_per_user)} recipes used per user</small>${adminGoal(week.meets_20_percent, eligible)}</article>
+      <article class="admin-okr"><span class="admin-okr-label">OKR 3 · Weekly app use · so far</span><strong>${adminRate(week.active_percent)}</strong><span>${adminCount(week.active_users)} of ${adminCount(week.eligible_users)} users · goal 80%</span>${adminGoal(week.meets_80_percent, eligible, week.is_complete)}</article>
+      <article class="admin-okr"><span class="admin-okr-label">OKR 4 · Weekly recipes · so far</span><strong>${adminRate(week.recipe_user_percent)}</strong><span>${adminCount(week.recipe_users)} of ${adminCount(week.eligible_users)} users · goal 20%</span><small>Average ${adminAverage(week.recipes_per_user)} recipes used per user</small>${adminGoal(week.meets_20_percent, eligible, week.is_complete)}</article>
     </div>
     <section class="admin-section"><div class="admin-section-head"><h2>Monthly food activity</h2><p>Current month and the preceding 11 months. Waste quantities stay separated by unit.</p></div>
       <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Month</th><th scope="col">Items added</th><th scope="col">Waste reports</th><th scope="col">Amount wasted</th></tr></thead><tbody>${monthRows}</tbody></table></div></section>
-    <section class="admin-section"><div class="admin-section-head"><h2>Weekly activity</h2><p>Last eight completed weeks in Mountain Time. Rates use confirmed accounts that existed before each week began.</p></div>
+    <section class="admin-section"><div class="admin-section-head"><h2>Weekly activity</h2><p>This week so far and eight completed weeks in Mountain Time. Rates use confirmed accounts that existed before each week began.</p></div>
       <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Week</th><th scope="col">App users</th><th scope="col">App use</th><th scope="col">Recipes / user</th><th scope="col">Recipe users</th></tr></thead><tbody>${weekRows}</tbody></table></div></section>
     <p class="admin-note">These totals begin when each tracker was introduced; older activity was not backfilled. App use counts recorded session starts. Recipe use counts recipes people confirmed they made from Reels or Pantry Pal.</p>`;
   }

@@ -132,28 +132,31 @@ begin
   ), '[]'::jsonb) into monthly_metrics
   from months m;
 
-  -- Last eight completed calendar weeks. Eligibility and active-session rules
+  -- Current week so far plus eight completed weeks. Eligibility and session rules
   -- match supabase/reports/weekly-active-users.sql: confirmed, nonanonymous
   -- users created before the week, with >=1 session start during that week.
   -- Recipe averages include eligible users with zero recorded recipes.
   with week_anchor as (
     select pg_catalog.date_trunc('week', pg_catalog.now() at time zone 'America/Denver') as this_week
   ), week_local as (
-    select a.this_week - (g.n * interval '1 week') as local_start
-      from week_anchor a cross join pg_catalog.generate_series(8, 1, -1) as g(n)
+    select a.this_week - (g.n * interval '1 week') as local_start,
+           g.n > 0 as is_complete
+      from week_anchor a cross join pg_catalog.generate_series(8, 0, -1) as g(n)
   ), weeks as (
     select local_start::date as week_start,
            (local_start + interval '1 week')::date as week_end_exclusive,
            local_start at time zone 'America/Denver' as start_at,
-           (local_start + interval '1 week') at time zone 'America/Denver' as end_at
+           (local_start + interval '1 week') at time zone 'America/Denver' as end_at,
+           is_complete
       from week_local
   ), totals as (
-    select w.week_start, w.week_end_exclusive,
+    select w.week_start, w.week_end_exclusive, w.is_complete,
            count(u.id) as eligible_users,
            count(u.id) filter (where exists (
              select 1 from public.app_sessions s
              where s.user_id = u.id
                and s.started_at >= w.start_at and s.started_at < w.end_at
+               and s.started_at <= pg_catalog.now()
            )) as active_users,
            coalesce(sum(rec.recipe_count), 0)::bigint as recipe_uses,
            count(u.id) filter (where rec.recipe_count > 0) as recipe_users
@@ -167,13 +170,15 @@ begin
           from public.recipe_use_events r
           where r.user_id = u.id
             and r.used_at >= w.start_at and r.used_at < w.end_at
+            and r.used_at <= pg_catalog.now()
       ) rec on true
-      group by w.week_start, w.week_end_exclusive
+      group by w.week_start, w.week_end_exclusive, w.is_complete
   )
   select coalesce(pg_catalog.jsonb_agg(
     pg_catalog.jsonb_build_object(
       'week_start', t.week_start,
       'week_end_exclusive', t.week_end_exclusive,
+      'is_complete', t.is_complete,
       'eligible_users', t.eligible_users,
       'active_users', t.active_users,
       'active_percent', case when t.eligible_users > 0
