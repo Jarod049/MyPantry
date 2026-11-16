@@ -56,16 +56,17 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const DAY = 864e5;
-const TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
 const pad2 = n => String(n).padStart(2, '0');
 const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const inDays = n => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return isoOf(d); };
 const parseIso = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const todayIso = () => isoOf(new Date());
-// A typed spoil date may not be in the past. An existing item's unchanged date is
-// still allowed, so food that already passed its date can be edited or logged.
-const pastSpoilDate = (value, original = '') => !!value && value < todayIso() && value !== original;
-const daysLeft = it => Math.round((parseIso(it.exp) - TODAY) / DAY);
+const inDays = n => { const d = parseIso(todayIso()); d.setDate(d.getDate() + n); return isoOf(d); };
+const validIsoDate = value => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = parseIso(value);
+  return !Number.isNaN(date.getTime()) && isoOf(date) === value;
+};
+const daysLeft = it => Math.round((parseIso(it.exp) - parseIso(todayIso())) / DAY);
 const fmtDate = s => parseIso(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const byExp = (a, b) => a.exp.localeCompare(b.exp) || a.name.localeCompare(b.name);
@@ -82,18 +83,18 @@ function newUuid() {
 }
 
 function status(d) {
-  if (d < 0) return { cls: 'bad', label: 'Spoiled' };
-  if (d === 0) return { cls: 'now', label: 'Use today' };
+  if (d < 0) return { cls: 'bad', label: 'Date passed' };
+  if (d === 0) return { cls: 'now', label: 'Check today' };
   if (d <= 2) return { cls: 'now', label: `${plural(d, 'day')} left` };
   if (d <= 7) return { cls: 'soon', label: `${d} days left` };
-  return { cls: 'fresh', label: 'Fresh' };
+  return { cls: 'fresh', label: 'Later' };
 }
 const pillFor = it => { const s = status(daysLeft(it)); return `<span class="pill ${s.cls}">${s.label}</span>`; };
 function spoilText(it) {
   const d = daysLeft(it);
-  if (d < 0) return `Spoiled ${fmtDate(it.exp)}`;
-  if (d === 0) return 'Spoils today';
-  return `Spoils ${fmtDate(it.exp)}`;
+  if (d < 0) return `Check date passed ${fmtDate(it.exp)}`;
+  if (d === 0) return 'Check today';
+  return `Check by ${fmtDate(it.exp)}`;
 }
 
 /* ---------- Units ---------- */
@@ -157,10 +158,11 @@ function meatSnack(name) {
   return !/\b(?:raw|uncooked|fresh)\b/i.test(name) &&
     /\b(?:jerky|(?:meat|beef|turkey|pork|chicken|snack) sticks?)\b/i.test(name);
 }
-function estimate(cat, store, name = '') {
+function estimate(cat, store, name = '', acquiredOn = todayIso()) {
   // A short review reminder for packaged meat snacks, not a food safety date.
-  if (meatSnack(name) && store !== 'Freezer') return inDays(7);
-  return inDays((SHELF[cat] || SHELF.Other)[store] ?? 30);
+  const start = validIsoDate(acquiredOn) ? parseIso(acquiredOn) : parseIso(todayIso());
+  start.setDate(start.getDate() + (meatSnack(name) && store !== 'Freezer' ? 7 : (SHELF[cat] || SHELF.Other)[store] ?? 30));
+  return isoOf(start);
 }
 const CAT_TINT = { 'Fruits': '#fbe3de', 'Vegetables': '#e4f3e0', 'Meat & Seafood': '#fbe3de', 'Dairy & Eggs': '#e6eef9', 'Grains & Bread': '#f7ecd6', 'Snacks': '#f4e6f3', 'Sauces & Condiments': '#fae9d9', 'Spices & Baking': '#f7ecd6', 'Prepared Meals': '#e9e3f7', 'Drinks': '#e0f2f4', 'Other': '#eceee9' };
 const EMOJI = { apple: '🍎', banana: '🍌', strawberr: '🍓', broccoli: '🥦', lettuce: '🥬', garlic: '🧄', onion: '🧅', carrot: '🥕', tomato: '🍅', potato: '🥔', avocado: '🥑', lemon: '🍋', grape: '🍇', chicken: '🍗', beef: '🥩', steak: '🥩', salmon: '🐟', fish: '🐟', shrimp: '🍤', bacon: '🥓', milk: '🥛', egg: '🥚', cheese: '🧀', cheddar: '🧀', parmesan: '🧀', yogurt: '🍶', butter: '🧈', bread: '🍞', bagel: '🥯', tortilla: '🫓', rice: '🍚', spaghetti: '🍝', pasta: '🍝', flour: '🌾', cereal: '🥣', granola: '🥣', chip: '🍿', cookie: '🍪', cracker: '🍘', juice: '🧃', soda: '🥤', coffee: '☕', water: '💧', pea: '🫛', 'ice cream': '🍨', pizza: '🍕', waffle: '🧇', soy: '🥢', salsa: '🌶️', sauce: '🥫', soup: '🥫', peanut: '🥜', honey: '🍯', cream: '🥛', corn: '🌽' };
@@ -404,11 +406,76 @@ function rowToItem(r) {
     qty: Number(r.quantity), unit: r.measurement, exp: r.expiration_date,
     legacyUserId: r.user_id ?? null, wayAdded: r.way_added || 'manual',
     store: r.storage_location || (r.food_type === 'Frozen' ? 'Freezer' : 'Fridge'),
-    src: r.expiration_source || ((r.way_added === 'barcode' || r.way_added === 'manual') ? 'label' : 'ai')
+    src: r.expiration_source || ((r.way_added === 'barcode' || r.way_added === 'manual') ? 'label' : 'ai'),
+    acquiredOn: r.acquired_on || null, openedOn: r.opened_on || null,
+    estimateBasis: r.estimate_basis || null
   };
 }
+const BASIC_DATE_BASIS = 'Basic food-type reminder; check the package and your food.';
+function basicDateEstimate(item) {
+  item.exp = item.openedOn ? todayIso() : estimate(item.cat, item.store, item.name, item.acquiredOn);
+  item.src = 'ai';
+  item.estimateBasis = item.openedOn
+    ? 'No reliable after-opening duration yet. Check the package and food now.' : BASIC_DATE_BASIS;
+}
+async function estimateItemsWithAI(items) {
+  const candidates = items.filter(item => item.src === 'ai');
+  if (!candidates.length) return;
+  if (!sb) { candidates.forEach(basicDateEstimate); return; }
+  candidates.forEach(item => {
+    item.exp = null;
+    item.dateNeedsReview = true;
+    item.estimateBasis = 'No reliable date yet. Enter a package date or your own check-by date.';
+  });
+  if (!S.user?.id || !CFG.supabaseUrl || !CFG.supabaseKey) return;
+  const generation = accountGeneration, owner = S.user.id;
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error || !data.session?.access_token) throw new Error('Sign in again to estimate dates.');
+    for (let start = 0; start < candidates.length; start += 30) {
+      const batch = candidates.slice(start, start + 30);
+      const snapshots = batch.map(item => ({ item, version: item.dateEstimateSeq || 0, key: newUuid(), name: item.name, brand: item.brand || '',
+        product_name: item.productName || '', category: item.cat, storage: item.store,
+        acquired_on: item.acquiredOn || todayIso(), opened_on: item.openedOn || null }));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 70000);
+      let response;
+      try {
+        response = await fetch(`${CFG.supabaseUrl}/functions/v1/food-date-estimate`, {
+          method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseKey, Authorization: `Bearer ${data.session.access_token}` },
+          body: JSON.stringify({ items: snapshots.map(({ item, version, ...request }) => request) })
+        });
+      } finally { clearTimeout(timer); }
+      if (generation !== accountGeneration || owner !== S.user?.id) return;
+      if (!response.ok) throw new Error(`Date estimate service returned ${response.status}.`);
+      const result = await response.json();
+      const byKey = new Map((Array.isArray(result.items) ? result.items : []).map(value => [value.key, value]));
+      for (const request of snapshots) {
+        const item = request.item, value = byKey.get(request.key);
+        if ((item.dateEstimateSeq || 0) !== request.version || item.name !== request.name ||
+            (item.brand || '') !== request.brand || (item.productName || '') !== request.product_name ||
+            item.cat !== request.category || item.store !== request.storage ||
+            (item.acquiredOn || request.acquired_on) !== request.acquired_on ||
+            (item.openedOn || null) !== request.opened_on || item.src !== 'ai') continue;
+        if (validIsoDate(value?.estimated_date) && typeof value.basis === 'string' && value.basis.trim()) {
+          item.exp = value.estimated_date;
+          item.estimateBasis = value.basis.trim().slice(0, 300);
+          item.dateNeedsReview = false;
+        } else if (typeof value?.matched_food === 'string' && value.matched_food.trim()) {
+          const guidance = typeof value.basis === 'string' && value.basis.trim()
+            ? value.basis.trim().slice(0, 180)
+            : `USDA FoodKeeper has no numeric date for ${value.matched_food.trim().slice(0, 100)} in these conditions`;
+          item.estimateBasis = `${guidance}. Enter a package date or your own check-by date.`;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[MyPantry] FoodKeeper date estimate unavailable', error);
+  }
+}
 function statusFor(exp) {
-  const d = Math.round((parseIso(exp) - TODAY) / DAY);
+  const d = Math.round((parseIso(exp) - parseIso(todayIso())) / DAY);
   return d < 0 ? 'Expired' : d <= 7 ? 'Expiring soon' : 'Fresh';
 }
 async function loadPantry() {
@@ -1099,9 +1166,11 @@ function addItems(items) {
     const same = S.inv.find(i => i.name.toLowerCase() === n.name.toLowerCase()
       && (i.brand || '').toLowerCase() === (n.brand || '').toLowerCase()
       && (i.productName || '').toLowerCase() === (n.productName || '').toLowerCase()
-      && i.exp === n.exp && i.unit === n.unit);
+      && i.exp === n.exp && i.unit === n.unit && i.store === n.store
+      && (i.acquiredOn || null) === (n.acquiredOn || null) && (i.openedOn || null) === (n.openedOn || null));
     if (same) same.qty = Math.round((same.qty + n.qty) * 100) / 100;
-    else S.inv.push({ id: 'i' + (uid++), name: n.name, brand: n.brand || '', productName: n.productName || '', emoji: n.emoji, cat: n.cat, qty: n.qty, unit: n.unit, exp: n.exp, store: n.store, src: n.src });
+    else S.inv.push({ id: 'i' + (uid++), name: n.name, brand: n.brand || '', productName: n.productName || '', emoji: n.emoji, cat: n.cat, qty: n.qty, unit: n.unit, exp: n.exp, store: n.store, src: n.src,
+      acquiredOn: n.acquiredOn || null, openedOn: n.openedOn || null, estimateBasis: n.estimateBasis || null });
   });
 }
 
@@ -1110,7 +1179,9 @@ function pantryRow(item) {
     ingredient_name: item.name, brand: item.brand || null, product_name: item.productName || null,
     quantity: item.qty, measurement: item.unit,
     food_type: item.cat, expiration_date: item.exp, status: statusFor(item.exp),
-    storage_location: item.store, expiration_source: item.src
+    storage_location: item.store, expiration_source: item.src,
+    acquired_on: item.acquiredOn || null, opened_on: item.openedOn || null,
+    estimate_basis: item.src === 'ai' ? item.estimateBasis || null : null
   };
 }
 async function persistPantryDiff(before, after) {
@@ -1181,6 +1252,10 @@ let addingFood = false;
 let pendingFoodAdd = null;
 async function saveNewItems(items, mode = 'manual', trackAddition = true) {
   if (addingFood || !items.length) return false;
+  if (items.some(item => !validIsoDate(item.exp))) {
+    toast('Enter a check-by date for every item before saving.', null, 'alert');
+    return false;
+  }
   if (!sb) { addItems(items); return true; }
   if (!S.user?.id) return false;
   const owner = S.user.id, generation = accountGeneration;
@@ -1200,6 +1275,8 @@ async function saveNewItems(items, mode = 'manual', trackAddition = true) {
       auth_user_id: owner, ingredient_name: i.name, brand: i.brand || null, product_name: i.productName || null, quantity: i.qty,
       measurement: i.unit, food_type: i.cat, expiration_date: i.exp,
       storage_location: i.store, expiration_source: i.src,
+      acquired_on: i.acquiredOn || null, opened_on: i.openedOn || null,
+      estimate_basis: i.src === 'ai' ? i.estimateBasis || null : null,
       way_added: ({ pantry: 'pantry_photo', receipt: 'receipt', barcode: 'barcode' })[mode] || 'manual',
       status: statusFor(i.exp)
     }));
@@ -1605,8 +1682,8 @@ function rcard(r, opts = {}) {
   const u = recipeUrgency(r);
   const spoiled = r.ing.flatMap(g => findItems(g.m)).find(i => daysLeft(i) < 0);
   let warn = '';
-  if (spoiled) warn = `<div class="warnline" style="color:var(--tomato)">Check your ${esc(spoiled.name.toLowerCase())} first. It may have gone bad.</div>`;
-  else if (u <= 3) warn = `<div class="warnline">Uses food that spoils in ${plural(u, 'day')}</div>`;
+  if (spoiled) warn = `<div class="warnline" style="color:var(--tomato)">Check your ${esc(spoiled.name.toLowerCase())} first. It passed its check date.</div>`;
+  else if (u <= 3) warn = `<div class="warnline">Uses food with a check date in ${plural(u, 'day')}</div>`;
   return `<div class="rcard"><div class="thumb" style="background:${r.bg}">${r.emoji}</div>
     <div><b>${esc(r.name)}</b><div class="meta">${r.time} min · Easy · ${r.type}${opts.sub ? '' : ` · you have all ${r.ing.length}`}</div>${warn}</div>
     <div class="btns"><button class="btn btn-ghost" data-act="recipe" data-arg="${r.id}" data-source="ai">View recipe</button>${opts.sub ? '' : `<button class="btn btn-soft" data-act="useAsk" data-arg="${r.id}" data-source="ai">I made this</button>`}</div></div>`;
@@ -1951,7 +2028,7 @@ function renderIng() {
     content = `<div class="empty"><div class="spinner" style="border-color:var(--line);border-top-color:var(--basil)"></div><p>Loading your pantry…</p></div>`;
   } else if (!n) {
     content = `<div class="empty"><div class="big-illus">🧺</div><h2>Your pantry is empty</h2>
-      <p>Log your groceries and we'll keep track of what you have and when it spoils.</p>
+      <p>Log your groceries and we'll keep track of what you have and when to check it.</p>
       <div class="pointer">Tap Add food to start ${ic('arrowDown')}</div></div>`;
   } else {
     content = `<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${P.search}</svg><input class="input" id="ingSearch" placeholder="Search your food" value="${esc(S.ingQuery)}" aria-label="Search your food"></div>
@@ -1960,7 +2037,7 @@ function renderIng() {
       <div id="ingList">${S.ingView === 'soon' ? renderSoon() : ingListHtml()}</div>`;
   }
   return `<div class="appbar"><div><h1>Ingredients</h1><div class="sub">${plural(n, 'item')} in your kitchen</div></div>${syncChip()}</div>
-    ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Going bad soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
+    ${n ? `<div class="seg" role="tablist"><button role="tab" class="${S.ingView === 'all' ? 'on' : ''}" data-act="ingView" data-arg="all">All items</button><button role="tab" class="${S.ingView === 'soon' ? 'on' : ''}" data-act="ingView" data-arg="soon">Check soon ${soonCount ? `<span class="count">${soonCount}</span>` : ''}</button></div>` : ''}
     <div class="scroll">${foodAddedCard()}${wasteCard()}${recipeUseCard()}${content}<div style="height:90px"></div></div>
     <button class="fab" data-act="tab" data-arg="scan">${ic('plus')} Add food</button>`;
 }
@@ -1973,11 +2050,11 @@ function itemRow(i) {
   return `<div class="swipe-item" data-swipe-id="${esc(i.id)}"><button class="item swipe-item-main" data-act="edit" data-arg="${esc(i.id)}" aria-label="Open ${esc(i.name)} to edit or delete">
     ${imgHtml(i)}
     <span><span class="name">${esc(i.name)}</span><br><span class="qty num">${qtyText(i.qty, i.unit)} · ${i.store}</span>
-      <span class="date num">${i.src === 'label' ? ic('tag') : ic('spark')} ${spoilText(i)}${i.src === 'ai' ? ' (estimate)' : ''}</span></span>
+      <span class="date num" ${i.src === 'ai' && i.estimateBasis ? `title="${esc(i.estimateBasis)}"` : ''}>${i.src === 'ai' ? ic('spark') : ic('tag')} ${spoilText(i)}${i.src === 'ai' ? ' (estimate)' : ''}</span></span>
     <span class="right">${pillFor(i)}<svg class="edit-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P.pencil}</svg></span>
   </button><button class="swipe-delete" data-act="deleteItem" data-arg="${esc(i.id)}" aria-label="Delete ${esc(i.name)}" hidden>${ic('trash')}<span>Delete</span></button></div>`;
 }
-// Search text and category chips apply to both "All items" and "Going bad soon".
+// Search text and category chips apply to both ingredient views.
 function filteredInv() {
   const q = S.ingQuery.toLowerCase().trim();
   return S.inv.filter(i => (S.ingCat === 'All' || i.cat === S.ingCat)
@@ -2003,8 +2080,8 @@ function renderSoon() {
   const bad = list.filter(i => daysLeft(i) < 0).length;
   const now = list.filter(i => daysLeft(i) >= 0 && daysLeft(i) <= 2).length;
   const wk = list.length - bad - now;
-  if (!list.length) return `<div class="empty"><div class="big-illus">✅</div><h2>Nothing is going bad this week</h2><p>We'll move food here 7 days before it spoils.</p></div>`;
-  return `<div class="soon-overview"><div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Spoiled</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
+  if (!list.length) return `<div class="empty"><div class="big-illus">✅</div><h2>No check dates this week</h2><p>We'll move food here 7 days before its check date.</p></div>`;
+  return `<div class="soon-overview"><div class="summary-strip"><div class="r"><b class="num">${bad}</b><span>Past date</span></div><div class="r"><b class="num">${now}</b><span>0–2 days</span></div><div class="y"><b class="num">${wk}</b><span>3–7 days</span></div></div>
     <p class="soon-note">Grouped by food category, then sorted by date. Check package dates and storage instructions.</p></div>
     <div class="ing-category-grid">${CATS.filter(c => list.some(i => i.cat === c)).map(c => {
       const items = list.filter(i => i.cat === c);
@@ -2046,7 +2123,10 @@ function itemForm(it, mode) {
   const [v, u] = it.qty != null ? disp(it.qty, it.unit) : ['1', S.metric ? 'ct' : 'ct'];
   const units = S.metric ? UNITS_METRIC : UNITS_US;
   const title = mode === 'new' ? 'Enter item details' : mode === 'review' && S.scan?.mode === 'barcode' ? 'Does this look right?' : mode === 'review' ? 'Edit detected item' : 'Edit item';
-  const srcNote = mode === 'edit' ? (it.src === 'label' ? `${ic('tag')}<span>This date came from the best-by label.</span>` : `${ic('spark')}<span>We estimated this date from the food type and where you keep it (${it.store.toLowerCase()}). Follow the package label and storage directions; this estimate is only a reminder.</span>`) : `${ic('spark')}<span>Leave the date blank and we'll estimate it from the food type and where you store it.</span>`;
+  const srcNote = it.src === 'label' ? `${ic('tag')}<span>This date was read from the package. Check the exact wording on its label.</span>`
+    : it.src === 'user' ? `${ic('tag')}<span>You entered this date.</span>`
+    : it.src === 'ai' && it.estimateBasis ? `${ic('spark')}<span>${esc(it.estimateBasis)} ${it.exp ? 'This is a reminder, not a food safety guarantee.' : ''}</span>`
+    : `${ic('spark')}<span>Leave the check-by date blank for an estimate based on the food, storage, and dates you provide. Package dates take priority.</span>`;
   const lookupNote = mode === 'review' && it.lookupSource
     ? `<div class="est-note">${ic('tag')}<span>Product information from ${esc(it.lookupSource)}. Check every field before saving.</span></div>` : '';
   const existingNote = mode === 'review' && S.scan?.mode === 'barcode'
@@ -2071,8 +2151,14 @@ function itemForm(it, mode) {
     <div class="est-note">For packaged food, choose box, bag or can and enter how many you have.</div>
     <div class="field"><label for="f_cat">Food category</label><select class="input" id="f_cat">${CATS.map(c => `<option ${c === (it.cat || 'Other') ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><span class="lbl">Stored in</span><div class="store-sel" id="f_store" role="radiogroup">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button type="button" role="radio" aria-checked="${s === (it.store || 'Fridge')}" class="${s === (it.store || 'Fridge') ? 'on' : ''}" data-store="${s}" style="flex:1;padding:8px">${s}</button>`).join('')}</div></div>
-    <div class="field"><label for="f_exp">Spoil date</label><input class="input" id="f_exp" type="date" min="${todayIso()}" data-orig="${esc(it.exp || '')}" value="${it.exp || ''}"><span class="field-err" id="f_expErr" hidden>Spoil date can't be in the past. Choose today or a later date.</span></div>
+    <div class="row2">
+      <div class="field"><label for="f_acquired">Bought or prepared (optional)</label><input class="input" id="f_acquired" type="date" max="${todayIso()}" value="${esc(it.acquiredOn ?? (mode === 'new' || mode === 'reviewNew' ? todayIso() : ''))}"></div>
+      <div class="field"><label for="f_opened">Opened (optional)</label><input class="input" id="f_opened" type="date" max="${todayIso()}" value="${esc(it.openedOn || '')}"></div>
+    </div>
+    <span class="field-err" id="f_datesErr" hidden>Check these dates. They cannot be in the future, and opened cannot be before bought or prepared.</span>
+    <div class="field"><label for="f_exp">Check-by date (optional)</label><input class="input" id="f_exp" type="date" data-orig="${esc(it.exp || '')}" value="${esc(it.exp || '')}"><span class="field-err" id="f_expErr" hidden>Enter a valid date or leave it blank for an estimate.</span></div>
     <div class="est-note">${srcNote}</div>
+    ${mode === 'edit' && it.src === 'ai' && !it.acquiredOn ? '<div class="est-note">For older items, add when you bought or prepared them. Saving will refresh the estimate.</div>' : ''}
   </form>
   <div class="sheet-foot">
     <button class="btn btn-primary" data-act="saveItem" id="saveItemBtn">${saveLabel}</button>
@@ -2091,14 +2177,18 @@ function openItemForm(it, mode) {
     btn.disabled = !ok;
   };
   qty.addEventListener('input', validate);
-  const exp = $('#f_exp');
-  const checkExp = () => {
-    const bad = pastSpoilDate(exp.value, exp.dataset.orig);
-    exp.classList.toggle('bad', bad);
-    $('#f_expErr').hidden = !bad;
+  const exp = $('#f_exp'), acquired = $('#f_acquired'), opened = $('#f_opened');
+  const checkDates = () => {
+    const bad = [acquired, opened].some(el => el.value && (!validIsoDate(el.value) || el.value > todayIso()))
+      || !!(acquired.value && opened.value && opened.value < acquired.value);
+    acquired.classList.toggle('bad', bad);
+    opened.classList.toggle('bad', bad);
+    $('#f_datesErr').hidden = !bad;
+    const expBad = !!exp.value && !validIsoDate(exp.value);
+    exp.classList.toggle('bad', expBad);
+    $('#f_expErr').hidden = !expBad;
   };
-  exp.addEventListener('input', checkExp);
-  exp.addEventListener('change', checkExp);
+  [exp, acquired, opened].forEach(el => { el.addEventListener('input', checkDates); el.addEventListener('change', checkDates); });
   $$('#f_store button').forEach(b => b.onclick = () => {
     $$('#f_store button').forEach(x => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
     b.classList.add('on'); b.setAttribute('aria-checked', 'true');
@@ -2132,12 +2222,38 @@ function readItemForm() {
   const [bq, bu] = fromDisp(q, $('#f_unit').value);
   const cat = $('#f_cat').value;
   const store = $('#f_store .on')?.dataset.store || 'Fridge';
+  const acquiredOn = $('#f_acquired').value || null, openedOn = $('#f_opened').value || null;
+  const datesBad = [acquiredOn, openedOn].some(date => date && (!validIsoDate(date) || date > todayIso()))
+    || !!(acquiredOn && openedOn && openedOn < acquiredOn);
+  if (datesBad) {
+    $('#f_datesErr').hidden = false; $('#f_acquired').classList.add('bad'); $('#f_opened').classList.add('bad');
+    return null;
+  }
   const expIn = $('#f_exp').value;
-  if (pastSpoilDate(expIn, $('#f_exp').dataset.orig)) {
+  if (expIn && !validIsoDate(expIn)) {
     $('#f_expErr').hidden = false; $('#f_exp').classList.add('bad'); $('#f_exp').focus();
     return null;
   }
-  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store, exp: expIn || estimate(cat, store, name), src: expIn ? 'label' : 'ai', emoji: guessEmoji(name) };
+  const sameDate = !!previous && expIn === previous.exp;
+  const src = expIn ? (sameDate ? previous.src : 'user') : 'ai';
+  if (src === 'ai' && openedOn && !acquiredOn) {
+    $('#f_datesErr').textContent = 'Add when you bought or prepared this food to use its opened date in an estimate.';
+    $('#f_datesErr').hidden = false; $('#f_acquired').classList.add('bad'); $('#f_acquired').focus();
+    return null;
+  }
+  const changedForEstimate = !previous || !sameDate || name !== previous.name || brand !== (previous.brand || '')
+    || productName !== (previous.productName || '') || cat !== previous.cat || store !== previous.store
+    || acquiredOn !== (previous.acquiredOn || null) || openedOn !== (previous.openedOn || null);
+  if (src === 'ai' && changedForEstimate && form.dataset.mode === 'edit' && !acquiredOn) {
+    $('#f_datesErr').textContent = 'Add when you bought or prepared this food to update its estimate.';
+    $('#f_datesErr').hidden = false; $('#f_acquired').classList.add('bad'); $('#f_acquired').focus();
+    return null;
+  }
+  const needsEstimate = src === 'ai' && changedForEstimate;
+  return { name, brand, productName, qty: Math.round(bq * 1000) / 1000, unit: bu, cat, store,
+    acquiredOn, openedOn, exp: expIn || estimate(cat, store, name, acquiredOn), src,
+    estimateBasis: src === 'ai' ? (previous?.estimateBasis || BASIC_DATE_BASIS) : null,
+    needsEstimate, emoji: guessEmoji(name) };
 }
 
 /* ===========================================================
@@ -2509,10 +2625,11 @@ function photoItem(r) {
   const cat = normalizeCategory(name, r.category);
   const store = ['Fridge', 'Pantry', 'Freezer'].includes(r.storage) ? r.storage : 'Pantry';
   const qty = Number(r.quantity) > 0 ? Number(r.quantity) : 1;
-  // A date printed on the package beats our estimate, unless the item is frozen.
-  const label = typeof r.label_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.label_date) && store !== 'Freezer' ? r.label_date : null;
+  // Keep a legible package date distinct from any estimated check date.
+  const label = validIsoDate(r.label_date) ? r.label_date : null;
   return { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat,
     unit: UNITS_US.includes(r.unit) ? r.unit : 'ct', qty, pkg: null, store, src: label ? 'label' : 'ai',
+    acquiredOn: todayIso(), openedOn: null, estimateBasis: label ? null : BASIC_DATE_BASIS,
     exp: label || estimate(cat, store, name), on: true, receiptText: r.receipt_text ? String(r.receipt_text).slice(0, 80) : '' };
 }
 
@@ -2769,6 +2886,8 @@ async function scanPhoto(file, diagnostics = {}) {
       fail(result.readable === false ? t.bad : t.none);
       return;
     }
+    await estimateItemsWithAI(items);
+    if (!current()) return;
     dismissReceiptCancel(); sc.items = items; sc.storeName = result.store_name || null; sc.stage = 'review'; render();
   } catch (error) {
     fail(error.name === 'AbortError' ? 'Reading the photo took too long. Please try again.' : error.message);
@@ -2952,7 +3071,10 @@ async function lookupBarcode(rawBarcode, sc) {
       throw new Error('The product database returned this bar code without a usable product name. Nothing was added.');
     }
     const detected = { tid: 't' + (uid++), name, brand, productName, emoji: guessEmoji(name), cat, unit, qty, pkg: null, store,
-      src: 'ai', exp: estimate(cat, store, name), on: true, barcode, lookupSource };
+      src: 'ai', acquiredOn: todayIso(), openedOn: null, estimateBasis: BASIC_DATE_BASIS,
+      exp: estimate(cat, store, name), on: true, barcode, lookupSource };
+    await estimateItemsWithAI([detected]);
+    if (!current()) return;
     sc.items = [detected]; sc.stage = 'review'; render();
     openItemForm({ ...detected, id: detected.tid }, 'review');
   } catch (error) {
@@ -2962,7 +3084,8 @@ async function lookupBarcode(rawBarcode, sc) {
 function buildDetected(mode) {
   return DETECT[mode].map(d => ({
     tid: 't' + (uid++), name: d.name, brand: d.brand || '', productName: d.productName || '', emoji: d.emoji, cat: d.cat, unit: d.unit, qty: d.qty && mode !== 'receipt' ? 1 : 1,
-    pkg: d.qty || null, store: d.store, src: d.src,
+    pkg: d.qty || null, store: d.store, src: d.src, acquiredOn: todayIso(), openedOn: null,
+    estimateBasis: d.src === 'ai' ? BASIC_DATE_BASIS : null,
     exp: d.src === 'label' ? inDays(d.d) : estimate(d.cat, d.store, d.name), on: true
   }));
 }
@@ -2978,27 +3101,27 @@ function renderReview() {
     <div class="pad" style="padding-top:12px"><button class="btn btn-ghost" data-act="manualInReview">${ic('plus')} Add something we missed</button></div>
     <div style="height:20px"></div>
   </div>
-  <div class="sheet-foot" style="background:var(--surface);padding-bottom:12px"><button class="btn btn-primary" data-act="confirmScan" ${on ? '' : 'disabled'}>Add ${plural(on, 'item')} to MyPantry</button></div>`;
+  <div class="sheet-foot" style="background:var(--surface);padding-bottom:12px"><button class="btn btn-primary" data-act="confirmScan" ${on && sc.items.filter(i => i.on).every(i => validIsoDate(i.exp)) && !sc.dateEstimatePromise && !sc.confirming ? '' : 'disabled'}>${sc.dateEstimatePromise ? 'Estimating dates…' : sc.confirming ? 'Saving…' : on && sc.items.some(i => i.on && !validIsoDate(i.exp)) ? 'Edit items that need a date' : `Add ${plural(on, 'item')} to MyPantry`}</button></div>`;
 }
 function reviewCard(i) {
   const [v, u] = disp(i.qty, i.unit);
   const dups = dupOf(i);
-  const tmp = { exp: i.exp };
-  const d = daysLeft(tmp);
+  const d = validIsoDate(i.exp) ? daysLeft(i) : null;
   return `<div class="rv ${i.on ? '' : 'off'}" data-tid="${i.tid}">
     <div class="rv-top">${imgHtml(i)}<div><b>${esc(i.name)}</b><span class="cat-l">${i.cat}${i.pkg ? ` · ${qtyText(i.pkg, i.unit)} size` : ''}${i.lookupSource ? ` · ${esc(i.lookupSource)}` : ''}${i.barcode ? ` · UPC/EAN ${esc(i.barcode)}` : ''}${i.receiptText ? ` · <span class="rc-line">${esc(i.receiptText)}</span>` : ''}</span></div>
       <div style="display:flex;gap:6px">${i.on ? `<button class="mini-btn" data-act="reviewEdit" data-arg="${i.tid}">Edit</button><button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}" aria-label="Remove ${esc(i.name)}">${'Remove'}</button>` : `<button class="mini-btn" data-act="reviewToggle" data-arg="${i.tid}">Add back</button>`}</div></div>
     ${i.on ? `<div class="rv-bottom">
       <div class="stepper"><button data-act="qty" data-arg="${i.tid}|-1" aria-label="Decrease">−</button><input class="num" value="${v}" inputmode="decimal" data-qty="${i.tid}" aria-label="Quantity for ${esc(i.name)}"><span class="u">${unitWord(v, u)}</span><button data-act="qty" data-arg="${i.tid}|1" aria-label="Increase">+</button></div>
-      <div class="rv-date">Spoils <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${plural(d, 'day')})</span><br><span class="src ${i.src === 'label' ? 'label' : 'ai'}">${i.src === 'label' ? 'Read from label' : 'Estimated reminder'}</span></div>
+      <div class="rv-date">${d === null ? '<b>Needs a check-by date</b>' : `Check by <b class="num">${fmtDate(i.exp)}</b> <span class="hint">(${d < 0 ? 'date passed' : plural(d, 'day')})</span>`}<br><span class="src ${i.src === 'ai' ? 'ai' : 'label'}">${d === null ? 'Tap Edit to enter a date' : i.src === 'label' ? 'Read from package' : i.src === 'user' ? 'Entered by you' : 'Estimated reminder'}</span></div>
     </div>
     <div class="rv-bottom"><span class="hint">Stored in</span><div class="store-sel">${['Fridge', 'Pantry', 'Freezer'].map(s => `<button class="${s === i.store ? 'on' : ''}" data-act="reviewStore" data-arg="${i.tid}|${s}">${s}</button>`).join('')}</div></div>
+    ${d === null ? `<div class="est-note">${esc(i.estimateBasis || 'Enter a package date or your own check-by date before saving.')}</div>` : ''}
     ${dups.length ? `<div class="dup">${ic('alert')}<span>You already have ${dups.map(x => `${qtyText(x.qty, x.unit)} (${status(daysLeft(x)).label.toLowerCase()})`).join(' and ')}. Check whether these are new packages or ones you've already counted.</span></div>` : ''}` : ''}
   </div>`;
 }
 function renderDone() {
   const sc = S.scan;
-  return `<div class="scroll"><div class="success"><div class="big-illus">✅</div><h1>Added to MyPantry</h1><p>${plural(sc.added.length, 'item')} saved. We'll remind you before ${sc.added.length === 1 ? 'it spoils' : 'they spoil'}.</p>
+  return `<div class="scroll"><div class="success"><div class="big-illus">✅</div><h1>Added to MyPantry</h1><p>${plural(sc.added.length, 'item')} saved. We'll remind you before ${sc.added.length === 1 ? 'its check date' : 'their check dates'}.</p>
     <div class="added-list">${sc.added.map(a => `<span>${a.emoji || '📦'} ${esc(a.name)}</span>`).join('')}</div>
     <button class="btn btn-primary" data-act="doneView">View my ingredients</button><button class="btn btn-ghost" data-act="doneMore">Log more food</button></div></div>`;
 }
@@ -3122,7 +3245,7 @@ function reelHtml(r) {
       <div class="reel-meta"><span>⏱ ${r.time} min</span><span>Easy</span><span>${esc(r.type)}</span><span>Serves ${r.serves}</span></div>
       ${ok ? `<div class="have">${ic('check')} You have all ${r.ing.length} ingredients</div>`
         : `<div class="need-row"><span class="need-ic">${ic('store')}</span><span><b>Need ${esc(needs)}</b><small>You have ${r.ing.length - miss.length} of ${r.ing.length} ingredients</small></span></div>`}
-      ${spoiled ? `<div class="reel-warn red">Check your ${esc(spoiled.name.toLowerCase())}. It passed its date ${fmtDate(spoiled.exp)}.</div>` : soon ? `<div class="reel-warn">Uses your ${esc(soon.name.toLowerCase())} before it spoils (${plural(daysLeft(soon), 'day')})</div>` : ''}
+      ${spoiled ? `<div class="reel-warn red">Check your ${esc(spoiled.name.toLowerCase())}. It passed its date ${fmtDate(spoiled.exp)}.</div>` : soon ? `<div class="reel-warn">Uses your ${esc(soon.name.toLowerCase())} before its check date (${plural(daysLeft(soon), 'day')})</div>` : ''}
       ${ok ? `<div class="used-row"><button class="u1" data-act="useAsk" data-arg="${esc(r.id)}" data-source="reels">I used this recipe</button><button class="u2" data-act="notYet" data-arg="${esc(r.id)}">Not yet</button></div>`
         : `<div class="used-row"><button class="u1" data-act="askNeed" data-arg="${esc(r.id)}">Ask for a swap</button><button class="u2" data-act="nextReel" data-arg="${esc(r.id)}">Next</button></div>`}
     </div>
@@ -3404,7 +3527,7 @@ function renderSettings() {
     <div class="set-group"><span class="lbl">Preferences</span><div class="set-card">
       ${row('palette', 'var(--basil-soft)', 'var(--basil)', 'App theme', APP_THEMES[visualTheme()].name, `<span class="theme-row-value"><span class="theme-row-preview">${APP_THEMES[visualTheme()].colors.map(color => `<i style="background:${color}"></i>`).join('')}</span>${chev}</span>`, 'openTheme')}
       ${row('ruler', 'var(--sky-soft)', 'var(--sky)', 'Use metric units', S.metric ? 'Showing kg, g, L and mL' : 'Showing lb, oz, gal and fl oz', sw('sw_metric', S.metric, 'Use metric units'))}
-      ${row('bell', 'var(--butter-soft)', 'var(--butter)', 'Spoil reminders', S.reminders ? 'Notify me 2 days before food spoils' : 'Off', sw('sw_rem', S.reminders, 'Spoil reminders'))}
+      ${row('bell', 'var(--butter-soft)', 'var(--butter)', 'Date reminders', S.reminders ? 'Notify me 2 days before a check date' : 'Off', sw('sw_rem', S.reminders, 'Date reminders'))}
       ${row('alert', 'var(--tomato-soft)', 'var(--tomato)', 'Food allergies', allergyList().length ? `${plural(allergyList().length, 'item')} avoided in suggestions` : 'None added', chev, 'editAllergies')}
       ${row('lock', 'var(--surface-3)', 'var(--ink-2)', 'Stay signed in', 'Sign out when using a shared device', '')}
     </div></div>
@@ -3738,22 +3861,43 @@ const ACT = {
   },
   async saveItem() {
     const f = $('#itemForm'); if (!f) return;
+    const button = $('#saveItemBtn'); if (!button || button.disabled) return;
     const data = readItemForm(); if (!data) return;
     const mode = f.dataset.mode, id = f.dataset.id;
+    const generation = accountGeneration;
+    const saveLabel = button.textContent;
+    const controls = [...f.querySelectorAll('input, select, button')];
+    const disabledBefore = controls.map(control => control.disabled);
+    controls.forEach(control => { control.disabled = true; });
+    button.disabled = true;
+    try {
+    if (data.needsEstimate) {
+      button.textContent = 'Estimating…';
+      await estimateItemsWithAI([data]);
+      if (generation !== accountGeneration || !f.isConnected) return;
+    }
+    if (!validIsoDate(data.exp)) {
+      $('#f_exp').value = '';
+      $('#f_expErr').textContent = data.estimateBasis || 'Enter a package date or your own check-by date.';
+      $('#f_expErr').hidden = false;
+      $('#f_exp').classList.add('bad');
+      $('#f_exp').focus();
+      button.disabled = false; button.textContent = saveLabel;
+      return;
+    }
+    button.textContent = 'Saving…';
     if (mode === 'edit' && sb && S.inv.find(i => i.id === id)?.dbId) {
-      saveItemToDb(id, data);
+      await saveItemToDb(id, data);
     } else if (mode === 'edit') {
       const it = S.inv.find(i => i.id === id);
-      const expChanged = $('#f_exp').value !== it.exp;
-      Object.assign(it, { name: data.name, brand: data.brand, productName: data.productName, qty: data.qty, unit: data.unit, cat: data.cat, store: data.store, exp: $('#f_exp').value || data.exp, emoji: it.emoji || data.emoji });
-      if (expChanged && $('#f_exp').value) it.src = 'label';
+      Object.assign(it, data, { emoji: it.emoji || data.emoji });
       closeSheet(); render(); toast(`Saved ${esc(it.name)}`);
     } else if (mode === 'review') {
       const r = S.scan.items.find(x => x.tid === id);
-      Object.assign(r, data, { emoji: r.emoji || data.emoji, src: $('#f_exp').value && $('#f_exp').value !== r.exp ? 'label' : r.src });
-      if (!$('#f_exp').value) r.exp = estimate(r.cat, r.store, r.name);
+      r.dateEstimateSeq = (r.dateEstimateSeq || 0) + 1;
+      Object.assign(r, data, { emoji: r.emoji || data.emoji });
       if (S.scan.mode === 'barcode') {
-        if (!await saveNewItems([r], 'barcode')) return;
+        if (!await saveNewItems([r], 'barcode')) { if (button.isConnected) button.textContent = saveLabel; return; }
         closeSheet();
         S.scan = { mode: 'barcode', stage: 'done', added: [r] };
         S.tab = 'scan'; render();
@@ -3763,9 +3907,13 @@ const ACT = {
     } else if (mode === 'reviewNew') {
       S.scan.items.push({ tid: 't' + (uid++), ...data, on: true }); closeSheet(); render();
     } else {
-      if (!await saveNewItems([data])) return;
+      if (!await saveNewItems([data])) { if (button.isConnected) button.textContent = saveLabel; return; }
       closeSheet();
       S.scan = { mode: 'manual', stage: 'done', added: [data] }; S.tab = 'scan'; render();
+    }
+    } finally {
+      if (f.isConnected) controls.forEach((control, index) => { control.disabled = disabledBefore[index]; });
+      if (button.isConnected) button.disabled = false;
     }
   },
   async deleteItem(id, button) {
@@ -3828,16 +3976,28 @@ const ACT = {
   },
   reviewToggle(tid) { const it = S.scan.items.find(x => x.tid === tid); it.on = !it.on; render(); },
   reviewEdit(tid) { const it = S.scan.items.find(x => x.tid === tid); openItemForm({ ...it, id: tid }, 'review'); },
-  reviewStore(arg) {
-    const [tid, s] = arg.split('|'); const it = S.scan.items.find(x => x.tid === tid);
-    it.store = s; if (it.src === 'ai') it.exp = estimate(it.cat, s, it.name);
-    else if (s === 'Freezer') { it.exp = estimate(it.cat, s, it.name); it.src = 'ai'; }
+  async reviewStore(arg) {
+    const sc = S.scan, [tid, s] = arg.split('|'); const it = sc?.items.find(x => x.tid === tid);
+    if (!it || it.store === s || sc.confirming) return;
+    it.store = s;
+    if (it.src !== 'ai') { render(); return; }
+    it.dateEstimateSeq = (it.dateEstimateSeq || 0) + 1;
+    const work = estimateItemsWithAI([it]);
+    sc.dateEstimatePromise = work;
+    render();
+    await work;
+    if (S.scan !== sc || sc.dateEstimatePromise !== work) return;
+    sc.dateEstimatePromise = null;
     render();
   },
   async confirmScan() {
-    const items = S.scan.items.filter(i => i.on);
-    const mode = S.scan.mode;
-    if (!await saveNewItems(items, mode)) return;
+    const sc = S.scan; if (!sc || sc.confirming) return;
+    if (sc.items.some(i => i.on && !validIsoDate(i.exp))) { toast('Edit items that need a check-by date before saving.', null, 'alert'); return; }
+    sc.confirming = true; render();
+    if (sc.dateEstimatePromise) await sc.dateEstimatePromise;
+    if (S.scan !== sc) return;
+    const items = sc.items.filter(i => i.on), mode = sc.mode;
+    if (!await saveNewItems(items, mode)) { sc.confirming = false; render(); return; }
     S.scan = { mode, stage: 'done', added: items }; render();
   },
   doneView() { S.scan = null; S.tab = 'ing'; S.ingView = 'all'; render(); },
@@ -4122,13 +4282,14 @@ async function saveItemToDb(id, data) {
   const owner = S.user.id, generation = accountGeneration;
   const it = S.inv.find(i => i.id === id);
   const btn = $('#saveItemBtn');
-  const exp = $('#f_exp').value || it.exp;
+  const exp = data.exp;
   btn.disabled = true; btn.textContent = 'Saving…';
   $('#dbErr')?.remove();
   let row, error;
   try {
   ({ data: row, error } = await sb.from('pantry_item')
-    .update({ ingredient_name: data.name, brand: data.brand || null, product_name: data.productName || null, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp), storage_location: data.store, expiration_source: data.src })
+    .update({ ingredient_name: data.name, brand: data.brand || null, product_name: data.productName || null, quantity: data.qty, measurement: data.unit, food_type: data.cat, expiration_date: exp, status: statusFor(exp), storage_location: data.store, expiration_source: data.src,
+      acquired_on: data.acquiredOn || null, opened_on: data.openedOn || null, estimate_basis: data.src === 'ai' ? data.estimateBasis || null : null })
     .eq('ingredient_id', it.dbId)
     .eq(OWNER_COLUMN, owner)
     .select()
