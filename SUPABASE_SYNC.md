@@ -112,8 +112,9 @@ confirmed food additions and logged waste amounts, separated by unit. It also
 shows this week so far and the last eight completed Mountain Time weeks of
 recorded app sessions and recipe use. While open and visible, the page refreshes
 from Supabase every minute; returning to the page or selecting Refresh also
-reloads the totals. The 80% app goal and 20% recipe goal use confirmed, nonanonymous
-accounts created before each week began. The recipe goal is the share of those
+reloads the totals. The current week uses all confirmed, nonanonymous accounts
+to date; completed weeks use accounts confirmed before the week began. The
+recipe goal is the share of those
 accounts that logged at least one made recipe; the page also shows the average
 number of logged recipes per eligible account. These event histories begin when
 their trackers were introduced; older activity was not backfilled.

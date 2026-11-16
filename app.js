@@ -378,6 +378,7 @@ let foodAddedRequest = 0;
 let adminAccessRequest = 0;
 let adminMetricsRequest = 0;
 let adminRefreshTimer = null;
+let adminMetricsInFlight = null;
 let recipeUseInFlight = false;
 let appStateTimer = null;
 let appStateWriteQueue = Promise.resolve();
@@ -531,7 +532,11 @@ async function loadAdminAccess() {
 
 async function loadAdminMetrics(silent = false) {
   if (!sb || !S.user?.id || !S.adminAllowed || S.setPage !== 'admin') return;
+  if (adminMetricsInFlight?.owner === S.user.id && adminMetricsInFlight.generation === accountGeneration
+    && adminMetricsInFlight.request === adminMetricsRequest) return;
   const owner = S.user.id, generation = accountGeneration, request = ++adminMetricsRequest;
+  const flight = { owner, generation, request };
+  adminMetricsInFlight = flight;
   if (!silent || S.adminMetricsStatus !== 'synced') {
     S.adminMetricsStatus = 'loading';
     S.adminMetricsError = null;
@@ -557,6 +562,8 @@ async function loadAdminMetrics(silent = false) {
     S.adminMetricsStatus = 'error';
     S.adminMetricsError = 'Couldn’t load the OKRs. Try again.';
     console.error('[MyPantry] admin OKRs unavailable', error);
+  } finally {
+    if (adminMetricsInFlight === flight) adminMetricsInFlight = null;
   }
   render();
 }
@@ -1441,7 +1448,7 @@ function afterRender(scrollTop) {
   persist();
   if (adminRefreshTimer) clearTimeout(adminRefreshTimer);
   adminRefreshTimer = null;
-  if (S.auth === 'app' && S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed && document.visibilityState === 'visible') {
+  if (S.auth === 'app' && S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed && !adminMetricsInFlight && document.visibilityState === 'visible') {
     adminRefreshTimer = setTimeout(() => { adminRefreshTimer = null; void loadAdminMetrics(true); }, 60 * 1000);
   }
   const sc = $('.scroll', app);
@@ -3509,7 +3516,7 @@ function renderAdminOkrs() {
     </div>
     <section class="admin-section"><div class="admin-section-head"><h2>Monthly food activity</h2><p>Current month and the preceding 11 months. Waste quantities stay separated by unit.</p></div>
       <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Month</th><th scope="col">Items added</th><th scope="col">Waste reports</th><th scope="col">Amount wasted</th></tr></thead><tbody>${monthRows}</tbody></table></div></section>
-    <section class="admin-section"><div class="admin-section-head"><h2>Weekly activity</h2><p>This week so far and eight completed weeks in Mountain Time. Rates use confirmed accounts that existed before each week began.</p></div>
+    <section class="admin-section"><div class="admin-section-head"><h2>Weekly activity</h2><p>This week so far includes all confirmed accounts to date. The eight completed Mountain Time weeks use accounts confirmed before each week began.</p></div>
       <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Week</th><th scope="col">App users</th><th scope="col">App use</th><th scope="col">Recipes / user</th><th scope="col">Recipe users</th></tr></thead><tbody>${weekRows}</tbody></table></div></section>
     <p class="admin-note">These totals begin when each tracker was introduced; older activity was not backfilled. App use counts recorded session starts. Recipe use counts recipes people confirmed they made from Reels or Pantry Pal.</p>`;
   }

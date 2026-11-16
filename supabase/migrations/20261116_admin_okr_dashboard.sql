@@ -133,8 +133,9 @@ begin
   from months m;
 
   -- Current week so far plus eight completed weeks. Eligibility and session rules
-  -- match supabase/reports/weekly-active-users.sql: confirmed, nonanonymous
-  -- users created before the week, with >=1 session start during that week.
+  -- match supabase/reports/weekly-active-users.sql for completed weeks:
+  -- confirmed, nonanonymous users created before the week, with >=1 session.
+  -- The in-progress week includes users confirmed by now, so new users count.
   -- Recipe averages include eligible users with zero recorded recipes.
   with week_anchor as (
     select pg_catalog.date_trunc('week', pg_catalog.now() at time zone 'America/Denver') as this_week
@@ -162,9 +163,11 @@ begin
            count(u.id) filter (where rec.recipe_count > 0) as recipe_users
       from weeks w
       left join auth.users u
-        on u.created_at < w.start_at
-       and u.email_confirmed_at < w.start_at
-       and not coalesce(u.is_anonymous, false)
+        on not coalesce(u.is_anonymous, false)
+       and (
+         (w.is_complete and u.created_at < w.start_at and u.email_confirmed_at < w.start_at)
+         or (not w.is_complete and u.created_at <= pg_catalog.now() and u.email_confirmed_at <= pg_catalog.now())
+       )
       left join lateral (
         select count(*) as recipe_count
           from public.recipe_use_events r
