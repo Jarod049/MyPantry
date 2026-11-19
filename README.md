@@ -2,9 +2,9 @@
 
 ## 1. App Summary
 
-Our app helps reduce household food waste by making it easier for users to keep track of the food they already have and decide what to eat before it expires.
+Our app helps reduce household food waste by making it easier for users to keep track of the food they already have and decide what to use soon.
 
-Users can track food in their fridge and pantry, including expiration dates, so they know what they have and what needs to be used soon. The app also suggests recipes based on ingredients the user already has, helping them use food before buying more or letting it go to waste.
+Users can track food in their fridge and pantry, including package dates and estimated check dates, so they know what they have and what needs attention soon. The app also suggests recipes based on ingredients the user already has, helping them use food before buying more or letting it go to waste.
 
 The app also includes an AI chat assistant that can answer food-related questions, recommend recipes, and help users decide what to make. Users can also browse food reels for meal inspiration and discover new ways to use the ingredients they already have.
 
@@ -15,8 +15,8 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 | Requirement | Status | Where to find it |
 | --- | --- | --- |
 | Add and manage food in the pantry, fridge, and freezer | Complete | Ingredients and Scan: manual entry, receipt photos, pantry photos, and UPC/EAN barcodes; swipe an ingredient left to reveal Delete |
-| Search food and see what needs attention soon | Complete | Ingredients → Going bad soon groups items by food category and sorts by date within each group |
-| Review dates and icons before saving scanned food | Complete | Scan review shows food icons and label dates when available; estimated dates are planning reminders |
+| Search food and see what needs attention soon | Complete | Ingredients → Check soon groups items by food category and sorts by date within each group |
+| Review dates and icons before saving scanned food | Complete | Scan review shows food icons and package dates when available; estimated dates are reminders to check food |
 | Ask cooking questions and get pantry-aware recipe ideas | Complete | Pantry Pal on Home; the message box grows as your prompt wraps |
 | Remove food through chat only when requested | Complete | Ask “remove my bananas” and confirm the matching item |
 | Find, save, and like recipes | Complete | Reels shows makeable recipes first and lets users opt in to recipes needing more ingredients |
@@ -96,7 +96,11 @@ Receipt and pantry photos are processed by the `receipt-scan` Edge Function; see
 
 Camera scan screens use a live rear-camera preview when `getUserMedia` is available over HTTPS or localhost. The shutter captures one still frame for analysis; gallery upload and file capture remain available when live preview is unsupported or permission is denied.
 
-UPC/EAN food bar codes are decoded in the browser and looked up through the authenticated `barcode-lookup` Edge Function using USDA FoodData Central first and Open Food Facts as a fallback. Results open in the existing editable item form, and spoil dates use the current category and storage estimates. See [BARCODE_SETUP.md](BARCODE_SETUP.md).
+UPC/EAN food bar codes are decoded in the browser and looked up through the authenticated `barcode-lookup` Edge Function using USDA FoodData Central first and Open Food Facts as a fallback. Results open in the existing editable item form. When the package date is unavailable, the food date service can estimate a check-by date from matched FoodKeeper guidance. See [BARCODE_SETUP.md](BARCODE_SETUP.md).
+
+Food entries can include optional bought/prepared and opened dates. New manual entries and receipt scans start with today as the bought/prepared date, which users can correct; pantry photos and older entries are not silently given a new purchase date. When no package or user date is entered, the authenticated `food-date-estimate` Edge Function uses AI to match the product to USDA FoodKeeper guidance, then calculates a check-by date from that guidance, storage location, and the supplied acquisition or opening date. An unknown acquisition date cannot produce an AI estimate; the user can add it or enter a check-by date. AI does not invent a duration or determine when food spoils. Some guidance has no usable calendar date; those items require the user to enter a package date or their own check-by date before saving. A date read from a package and a date entered by a user remain distinct from AI estimates. All estimated dates are reminders, not guarantees of food quality or safety.
+
+For this change, apply `supabase/migrations/20261113_pantry_date_estimates.sql` and `supabase/migrations/20261113_food_date_estimate_quota.sql` first, deploy `food-date-estimate`, redeploy `pantry-chat`, then deploy the website. The quota migration limits AI food matching per account. `pantry-chat` needs the new pantry date fields so it can describe estimated dates as reminders. See [the function guide](supabase/functions/food-date-estimate/README.md) for its catalog, configuration, and limits. These steps are required before the new website is used in production.
 
 Pantry data and account-specific state sync through Supabase after the follow-up migration is applied. See [SUPABASE_SYNC.md](SUPABASE_SYNC.md) for the migration and preview rollout steps, and [AUTH_SETUP.md](AUTH_SETUP.md) for the existing-data ownership step.
 
@@ -107,7 +111,7 @@ Pantry data and account-specific state sync through Supabase after the follow-up
 | Track progress toward 80% weekly use | [Weekly session report](supabase/reports/weekly-active-users.sql), run in the Supabase SQL editor by a project admin. The report counts distinct users with a recorded session start in the last completed Mountain Time week, among confirmed accounts that already existed when the week began. It does not count a session that started before the week. |
 | Classify meat snacks separately from raw meat | Recognized meat sticks and jerky receive a planning reminder when no package date is available. Follow the package label and storage directions. |
 | Show recognizable icons for scanned food | Match full food names and common plurals; use the neutral icon when there is no reliable match. |
-| Group Going bad soon by category | Keep the existing search and filters, and sort items by date within their food categories. |
+| Group Check soon by category | Keep the existing search and filters, and sort items by date within their food categories. |
 | Remove an ingredient from chat only when asked | Type an explicit command such as “remove my bananas” or “Remove Bananas from my pantry.” Pantry Pal checks the saved name, then retries without a leading “my” or “the.” A single match opens a confirmation; duplicate names direct you to Ingredients. |
 
 To see OKR #3, open **Supabase → SQL Editor → New query**, paste the linked report, and select **Run**. Read `active_percent` and `meets_80_percent`. This measures app opens through session starts; it does not measure feature usage.
