@@ -2,12 +2,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '../dist');
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || '127.0.0.1';
 http.createServer((req, res) => {
   const file = new URL(req.url, 'http://localhost').pathname;
-  const allowed = ['/', '/index.html', '/app.js', '/auth.js', '/styles.css', '/config.js'];
+  const allowed = ['/', '/index.html', '/app.js', '/auth.js', '/styles.css', '/config.js',
+    '/recipes.js', '/maintenance.html', '/maintenance.css', '/maintenance.js', '/assets/maintenance-hero.svg'];
   if (!allowed.includes(file)) { res.writeHead(404); res.end('Not found'); return; }
   fs.readFile(path.join(root, file === '/' ? 'index.html' : file.slice(1)), (error, data) => {
     if (error) { res.writeHead(404); res.end('Run npm run build first.'); return; }
