@@ -26,6 +26,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 | Manage account details and preferences | Complete | Settings supports username, email, password, profile photo, allergies, and other preferences |
 | Measure the 80% weekly usage OKR | Complete | Run the [weekly session report](supabase/reports/weekly-active-users.sql) in the Supabase SQL Editor |
 | Review four OKRs from an admin account | Complete after migration | Settings → Admin OKRs for the confirmed `rgardanier@gmail.com` account |
+| Maintain users, recipes, and pantry records | Code ready; production rollout pending | [Maintenance page setup](MAINTENANCE_SETUP.md); protected landing page at `/maintenance.html` |
 | Use the app on phones, tablets, and desktop | Complete | The layout adapts to screen size |
 | Verify a Lighthouse accessibility score of at least 90 | Not complete | The score has not been verified |
 
@@ -72,6 +73,8 @@ Food allergy preferences are stored in the existing per-account `recipe_preferen
 
 The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. The workflow runs the same build as local development, publishes the generated `dist/` folder, and versions asset URLs so browsers can load changed files. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
 
+The separate IS401 maintenance landing page is `https://jarod049.github.io/MyPantry/maintenance.html`. It uses Supabase Auth, a private maintenance role, and a server-side Edge Function for user, recipe, and pantry-item CRUD. The login, logout, image, and hidden maintenance buttons are included in the Pages build. Apply the migration, deploy the function, allowlist the invitation redirect, and grant a dedicated confirmed account before handing credentials to TAs; see [MAINTENANCE_SETUP.md](MAINTENANCE_SETUP.md). The website never stores a TA password.
+
 ## 7. Verify
 
 - Sign up with a real email and complete confirmation if required.
@@ -83,6 +86,8 @@ The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The 
 - With one Bananas entry in Ingredients, ask Pantry Pal to “remove my bananas.” Cancel once to verify the item stays, then repeat and confirm to verify it disappears.
 
 Recipe Reels come from a catalog of 120+ recipes. The built-in copy lives in `recipes.js`; `supabase/migrations/20261103_recipe_reels.sql` creates the public-read `recipe` table and seeds the same reels. After editing `recipes.js`, run `npm run recipes:sql` and apply the regenerated migration. To add reels without a redeploy, insert rows into `public.recipe` with `is_published = true` (an optional `video_url` plays a real clip). The feed shows recipes you can make now. Select **Show recipes that need more ingredients** to see additional recipes with their missing ingredients.
+
+When the recipe table loads, it is the source of truth for Reels; the bundled recipes appear only if that read fails. A deleted or unpublished database recipe will no longer remain visible through the bundle. The generated seed SQL contains `ON CONFLICT DO UPDATE`; rerunning it can overwrite recipe edits made on the maintenance page. Review seed changes before applying it to a catalog that editors have changed.
 
 The Ingredients tab shows how many recipes the account made this month, split between Reels and Pantry Pal, plus a dated history. Confirming “I used this recipe” in Reels updates the pantry and records a use together; viewing, saving, or liking a reel does not count. For a recipe suggested in free-form Pantry Pal chat, users explicitly log its name with “Log a recipe I made.” That log does not automatically deduct ingredients from the pantry. Each use is a separate owner-scoped record in `recipe_use_events`, so making the same recipe twice counts twice. Apply `supabase/migrations/20261110_recipe_use_tracking.sql` before deploying this frontend; see [SUPABASE_SYNC.md](SUPABASE_SYNC.md).
 

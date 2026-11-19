@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPantry | Records studio</title>
+  <meta name="description" content="MyPantry's private account and food-record maintenance workspace.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="maintenance.css">
+  <style>[hidden]{display:none!important}</style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="MyPantry home">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span>MyPantry<span class="brand-accent">.</span></span>
+    </a>
+    <nav aria-label="Page navigation">
+      <a class="quiet-link" href="./">Open the app <span aria-hidden="true">↗</span></a>
+      <button type="button" id="logoutButton" class="button button-outline" hidden>Log out</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="heroTitle">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="eyebrow-dot"></span> MyPantry team workspace</span>
+        <h1 id="heroTitle">Keep good food <em>moving.</em></h1>
+        <p>Manage the people, recipes, and pantry records behind a better way to plan meals and reduce food waste.</p>
+        <div class="hero-points" aria-label="What this workspace offers">
+          <span><span aria-hidden="true">✓</span> Real MyPantry records</span>
+          <span><span aria-hidden="true">✓</span> Protected team access</span>
+        </div>
+      </div>
+      <!-- A real image element satisfies the landing-page image requirement and has descriptive alt text. -->
+      <img class="hero-image" src="assets/maintenance-hero.svg" alt="Illustration of organized pantry shelves with food jars, vegetables, cereal, and a recipe card">
+    </section>
+
+    <div class="main-content">
+      <section id="loginSection" class="login-card" aria-labelledby="loginTitle">
+        <div class="login-intro">
+          <span class="section-kicker">Private access</span>
+          <h2 id="loginTitle">Sign in to maintain MyPantry</h2>
+          <p>Use a designated maintenance account. The editing tools appear after your account is verified.</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label for="loginEmail">Email address</label>
+          <input id="loginEmail" name="user_email" type="email" autocomplete="username" required placeholder="name@example.com">
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" name="user_password" type="password" autocomplete="current-password" required placeholder="Enter your password">
+          <button type="submit" class="button button-primary" id="loginButton">Sign in</button>
+        </form>
+      </section>
+
+      <section id="passwordSection" class="login-card" aria-labelledby="passwordTitle" hidden>
+        <div class="login-intro">
+          <span class="section-kicker">Invitation</span>
+          <h2 id="passwordTitle">Set your password</h2>
+          <p>Your invitation has signed you in for setup. Choose a password, then return here to access the maintenance tools once the site owner enables your account.</p>
+        </div>
+        <form id="passwordForm" class="login-form">
+          <label for="newPassword">New password</label>
+          <input id="newPassword" type="password" autocomplete="new-password" minlength="10" required>
+          <label for="confirmPassword">Confirm password</label>
+          <input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required>
+          <button type="submit" class="button button-primary" id="setPasswordButton">Set password</button>
+        </form>
+      </section>
+
+      <section id="pendingSection" class="login-card" aria-labelledby="pendingTitle" hidden>
+        <div class="login-intro">
+          <span class="section-kicker">Access pending</span>
+          <h2 id="pendingTitle">Your account is ready</h2>
+          <p>Your password is set. Ask the MyPantry site owner to enable maintenance access for your account, then sign in again.</p>
+        </div>
+        <div><button type="button" class="button button-outline" id="pendingLogout">Log out</button></div>
+      </section>
+
+      <!-- These controls remain hidden until the server approves the signed-in account. -->
+      <section id="workspace" class="workspace" aria-labelledby="workspaceTitle" hidden>
+        <div class="workspace-heading">
+          <div>
+            <span class="section-kicker">Maintenance</span>
+            <h2 id="workspaceTitle">Welcome back, <span id="accountName">team member</span></h2>
+            <p>Changes here affect live records. Review each entry before saving.</p>
+          </div>
+        </div>
+        <div class="workspace-nav" aria-label="Maintenance areas">
+          <button type="button" class="nav-card" id="usersButton">
+            <span class="nav-icon" aria-hidden="true">◉</span>
+            <span><strong>Maintain Users</strong><small>View, invite, edit, and remove accounts</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button type="button" class="nav-card" id="recordsButton">
+            <span class="nav-icon" aria-hidden="true">▤</span>
+            <span><strong>Maintain Records</strong><small>Manage recipes and pantry items</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+        </div>
+        <div class="record-choices" id="recordChoices" hidden>
+          <button type="button" class="table-choice" id="recipesButton">Maintain Recipes <span aria-hidden="true">→</span></button>
+          <button type="button" class="table-choice" id="pantryButton">Maintain Pantry Items <span aria-hidden="true">→</span></button>
+        </div>
+        <section class="data-panel" id="dataPanel" hidden aria-labelledby="dataTitle">
+          <div class="data-heading">
+            <div><span id="dataKicker" class="section-kicker">Records</span><h3 id="dataTitle">Records</h3><p id="dataHelp"></p></div>
+            <button type="button" class="button button-primary" id="createButton">Add record</button>
+          </div>
+          <div id="listLoading" class="loading" hidden>Loading records…</div>
+          <div id="listEmpty" class="empty" hidden>No records on this page yet.</div>
+          <div class="table-scroll"><table id="recordsTable"><thead id="recordsHead"></thead><tbody id="recordsBody"></tbody></table></div>
+          <div class="pagination" id="pagination" hidden>
+            <button type="button" class="button button-outline" id="previousButton">Previous</button>
+            <span id="pageLabel">Page 1</span>
+            <button type="button" class="button button-outline" id="nextButton">Next</button>
+          </div>
+        </section>
+      </section>
+
+      <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+    </div>
+  </main>
+
+  <dialog id="editDialog" class="edit-dialog" aria-labelledby="editTitle">
+    <form id="editForm">
+      <div class="dialog-heading"><div><span id="editKicker" class="section-kicker">Maintenance</span><h2 id="editTitle">Edit record</h2></div><button type="button" id="closeDialog" class="icon-button" aria-label="Close editor">×</button></div>
+      <p id="editHelp" class="edit-help"></p>
+      <div id="editFields" class="edit-fields"></div>
+      <p id="editError" class="edit-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button button-outline" id="cancelEdit">Cancel</button><button type="submit" class="button button-primary" id="saveButton">Save changes</button></div>
+    </form>
+  </dialog>
+
+  <footer class="site-footer"><span>MyPantry</span><span>Thoughtful food management for every kitchen.</span></footer>
+
+  <!-- Only a public Supabase key reaches the browser. All maintenance writes are checked by the server. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="maintenance.js"></script>
+</body>
+</html>

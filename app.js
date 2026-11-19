@@ -662,8 +662,8 @@ function persist() {
   } catch (_) {}
   if (sb && S.user?.id) queueUserAppStateWrite();
 }
-/* Published reels from the Supabase `recipe` table. The built-in catalog keeps the
-   feed full when the table is missing, empty or unreachable. */
+/* Published reels from the Supabase `recipe` table. The built-in catalog is
+   an offline fallback; a successful database read is authoritative, even empty. */
 function rowToRecipe(row) {
   const ing = Array.isArray(row.ingredients) ? row.ingredients
     .filter(g => g && g.m && g.label).map(g => ({ m: String(g.m).toLowerCase(), a: Number(g.a) || 1, label: String(g.label) })) : [];
@@ -697,20 +697,27 @@ async function loadLikeCounts(force = false) {
     console.warn('[MyPantry] recipe like counts unavailable', error);
   }
 }
-let remoteRecipesLoaded = false;
-async function loadRemoteRecipes() {
-  if (!sb || remoteRecipesLoaded) return;
-  remoteRecipesLoaded = true;
+let remoteRecipesLoaded = false, remoteRecipesAt = 0, remoteRecipesLoading = false;
+async function loadRemoteRecipes(force = false) {
+  // Recheck on returning to Reels so maintenance changes appear without a full reload.
+  if (!sb || remoteRecipesLoading || (!force && remoteRecipesLoaded)
+    || (force && remoteRecipesLoaded && Date.now() - remoteRecipesAt < 30000)) return;
+  remoteRecipesLoading = true;
   try {
     const { data, error } = await sb.from('recipe').select('*').eq('is_published', true).order('sort_order').limit(1000);
     if (error) throw error;
-    if (!Array.isArray(data) || !data.length) return;
-    addRecipes(data.map(rowToRecipe));
+    if (!Array.isArray(data)) throw new Error('Invalid recipe catalog response');
+    // Replacing the fallback also removes recipes unpublished or deleted by an admin.
+    RECIPES.splice(0, RECIPES.length, ...data.map(rowToRecipe).filter(r => r.ing.length && r.steps.length));
+    remoteRecipesLoaded = true;
+    remoteRecipesAt = Date.now();
     if (S.auth === 'app' && ((S.tab === 'reels' && S.reelView !== 'saved' && !$('#reelFeed')?.scrollTop)
       || (S.tab === 'settings' && S.setPage === 'deals'))) render();
   } catch (error) {
     remoteRecipesLoaded = false;
     console.warn('[MyPantry] recipe catalog unavailable, using built-in reels', error);
+  } finally {
+    remoteRecipesLoading = false;
   }
 }
 
@@ -996,6 +1003,7 @@ async function endAppSession(reason = 'signed_out') {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.auth === 'app') {
     resumeAppSessionAfterVisibility();
+    if (S.tab === 'reels') void loadRemoteRecipes(true);
     if (S.tab === 'settings' && S.setPage === 'admin' && S.adminAllowed) void loadAdminMetrics(true);
   } else if (adminRefreshTimer) {
     clearTimeout(adminRefreshTimer);
@@ -3130,7 +3138,7 @@ function renderReels() {
   const hasExtra = rank.near.length + rank.rest.length > 0;
   if (!reelOrder.length) {
     return `<div class="reels empty-mode"><div class="reels-top"><div><h1>Recipe Reels</h1></div>${reelSeg()}</div>
-      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>You don't have enough ingredients to make anything yet. Try adding more food to your pantry</p>
+      <div class="reels-empty"><div><div class="big-illus">🍳</div><p>${RECIPES.length ? "You don't have enough ingredients to make anything yet. Try adding more food to your pantry" : 'No recipes are published right now. Check back soon.'}</p>
       <div class="reels-empty-btns">${addBtn}${hasExtra ? `<button class="btn btn-sm reel-ghost-btn" data-act="reelMore" data-arg="on">${MORE_BTN}</button>` : ''}</div></div></div></div>`;
   }
   S.reelShown = Math.min(reelOrder.length, Math.max(REEL_BATCH, S.reelShown || 0));
@@ -3728,7 +3736,7 @@ const ACT = {
     }
     if (arg === 'scan' && S.scan && S.scan.stage === 'done') S.scan = null;
     if (arg === 'settings') S.setPage = null;
-    if (arg === 'reels' && S.tab !== 'reels') void loadLikeCounts();
+    if (arg === 'reels' && S.tab !== 'reels') { void loadLikeCounts(); void loadRemoteRecipes(true); }
     if (S.tab === 'reels' && arg !== 'reels') S.reelMoreIntroVisible = false;
     S.tab = arg; render();
   },

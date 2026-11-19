@@ -12,18 +12,27 @@ try { publicKey ||= JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64url
 if (!publicKey) throw new Error('Use only a Supabase publishable or legacy anon key. Secret keys must never be included in the website.');
 const dist = path.join(root, 'dist');
 fs.mkdirSync(dist, { recursive: true });
-for (const file of ['index.html', 'styles.css', 'app.js', 'auth.js', 'recipes.js']) fs.copyFileSync(path.join(root, file), path.join(dist, file));
+for (const file of [
+  'index.html', 'styles.css', 'app.js', 'auth.js', 'recipes.js',
+  'maintenance.html', 'maintenance.css', 'maintenance.js'
+]) fs.copyFileSync(path.join(root, file), path.join(dist, file));
+fs.mkdirSync(path.join(dist, 'assets'), { recursive: true });
+fs.copyFileSync(path.join(root, 'assets', 'maintenance-hero.svg'), path.join(dist, 'assets', 'maintenance-hero.svg'));
 if (demoAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(demoAccountId)) {
   throw new Error('DEMO_ACCOUNT_ID must be the Demo user UUID from Supabase Auth.');
 }
 const config = { supabaseUrl, supabaseKey, demoAccountId };
 fs.writeFileSync(path.join(dist, 'config.js'), 'window.MYPANTRY_CONFIG = ' + JSON.stringify(config) + ';\n');
 // New asset URLs make each deployment visible without a hard refresh.
-let html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
-for (const file of ['styles.css', 'app.js', 'auth.js', 'recipes.js', 'config.js']) {
-  const version = createHash('sha256').update(fs.readFileSync(path.join(dist, file))).digest('hex').slice(0, 12);
-  html = html.replaceAll('"' + file + '"', '"' + file + '?v=' + version + '"');
+for (const [page, assets] of [
+  ['index.html', ['styles.css', 'app.js', 'auth.js', 'recipes.js', 'config.js']],
+  ['maintenance.html', ['maintenance.css', 'maintenance.js', 'config.js', 'assets/maintenance-hero.svg']]
+]) {
+  let html = fs.readFileSync(path.join(dist, page), 'utf8');
+  for (const file of assets) {
+    const version = createHash('sha256').update(fs.readFileSync(path.join(dist, file))).digest('hex').slice(0, 12);
+    html = html.replaceAll('"' + file + '"', '"' + file + '?v=' + version + '"');
+  }
+  fs.writeFileSync(path.join(dist, page), html);
 }
-fs.writeFileSync(path.join(dist, 'index.html'), html);
 console.log('Built Supabase-connected app in dist/');
-
