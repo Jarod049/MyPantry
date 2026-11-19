@@ -9,7 +9,8 @@
   const fields = {
     users: [
       { key: 'email', label: 'Email address', type: 'email', required: true, max: 254 },
-      { key: 'display_name', label: 'Display name', type: 'text', max: 40 }
+      { key: 'display_name', label: 'Display name', type: 'text', max: 40 },
+      { key: 'password', label: 'Initial password', type: 'password', required: true, createOnly: true, min: 10, max: 128, hint: 'Share this privately with the account owner. It is not saved on this page.' }
     ],
     recipes: [
       { key: 'recipe_id', label: 'Recipe ID', type: 'text', required: true, max: 80, hint: 'Lowercase letters, numbers, and hyphens. This cannot change later.' },
@@ -42,7 +43,7 @@
       { key: 'way_added', label: 'Entry source', type: 'select', options: ['manual', 'barcode', 'receipt', 'pantry_photo'] }
     ]
   };
-  const state = { authorized: false, resource: null, page: 1, items: [], hasMore: false, editing: null, client: null, listRequest: 0 };
+  const state = { authorized: false, canGrantAdmin: false, resource: null, page: 1, items: [], hasMore: false, editing: null, client: null, listRequest: 0 };
   const inviteReturn = /(?:^|[?&#])(?:type=invite|type=recovery|access_token=|code=)/.test(window.location.search + window.location.hash);
 
   function notice(message, error = false) {
@@ -58,6 +59,7 @@
 
   function clearAccess() {
     state.authorized = false;
+    state.canGrantAdmin = false;
     state.resource = null;
     state.items = [];
     state.page = 1;
@@ -98,6 +100,7 @@
     const result = await api({ resource: 'session', action: 'status' });
     if (!result?.isAdmin) return false;
     state.authorized = true;
+    state.canGrantAdmin = !!result.canGrantAdmin;
     const { data } = await state.client.auth.getUser();
     $('accountName').textContent = data?.user?.user_metadata?.name || data?.user?.email || 'team member';
     showOnly('workspace');
@@ -224,14 +227,14 @@
       else $(id).removeAttribute('aria-current');
     }
     const content = {
-      users: ['People', 'Users', 'Invite an account, update its name or email, or remove it. Invitations let people set their own password.'],
+      users: ['People', 'Users', 'Create an account with an initial password, update its name or email, or remove it. Only the site owner can give another account maintenance access.'],
       recipes: ['Food ideas', 'Recipes', 'Published recipes appear in Reels. New recipes start unpublished until you review them.'],
       pantry: ['Inventory', 'Pantry items', 'These are live food records owned by individual accounts. Date status updates automatically.']
     }[resource];
     $('dataKicker').textContent = content[0];
     $('dataTitle').textContent = content[1];
     $('dataHelp').textContent = content[2];
-    $('createButton').textContent = resource === 'users' ? 'Invite user' : resource === 'recipes' ? 'Add recipe' : 'Add pantry item';
+    $('createButton').textContent = resource === 'users' ? 'Create account' : resource === 'recipes' ? 'Add recipe' : 'Add pantry item';
     $('listLoading').hidden = false;
     $('listEmpty').hidden = true;
     $('recordsTable').hidden = true;
@@ -333,6 +336,16 @@
         addFood.textContent = 'Add food';
         addFood.addEventListener('click', () => openEditor('pantry', null, item.id));
         actions.append(addFood);
+        if (state.canGrantAdmin && !item.is_admin) {
+          const grant = document.createElement('button');
+          grant.type = 'button';
+          grant.className = 'small-button';
+          grant.textContent = 'Give maintenance access';
+          grant.disabled = !item.email_confirmed_at;
+          if (grant.disabled) grant.title = 'This account must be confirmed first.';
+          else grant.addEventListener('click', () => grantAdmin(item));
+          actions.append(grant);
+        }
       }
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -356,6 +369,19 @@
 
   function itemId(resource, item) {
     return resource === 'users' ? item.id : resource === 'recipes' ? item.recipe_id : item.ingredient_id;
+  }
+
+  async function grantAdmin(item) {
+    if (!state.authorized || !state.canGrantAdmin) return;
+    if (!window.confirm('Give ' + item.email + ' full maintenance access to users, recipes, and pantry items?')) return;
+    notice('');
+    try {
+      await api({ resource: 'users', action: 'grant_admin', id: item.id, values: { email: item.email } });
+      await chooseResource('users', state.page);
+      notice(item.email + ' can now sign in to the maintenance page.');
+    } catch (failure) {
+      notice(failure.message, true);
+    }
   }
 
   async function deleteItem(resource, item) {
@@ -401,7 +427,7 @@
     $('editKicker').textContent = creating ? 'New record' : 'Edit record';
     $('editTitle').textContent = (creating ? 'Add ' : 'Edit ') + ({ users: 'user', recipes: 'recipe', pantry: 'pantry item' }[resource]);
     $('editHelp').textContent = resource === 'users'
-      ? creating ? 'An invitation email lets the person choose their own password.' : item.email?.toLowerCase() === 'rgardanier@gmail.com'
+      ? creating ? 'Create an account with a password you enter now. Share the password privately; this page will clear it after saving.' : item.email?.toLowerCase() === 'rgardanier@gmail.com'
         ? 'This account controls the OKR dashboard, so its sign-in email is locked. You can update its display name.'
         : 'The account owner may need to confirm a changed email.'
       : resource === 'recipes' ? 'Save the recipe as unpublished while you review it. Published recipes appear in Reels.'
@@ -409,7 +435,7 @@
     $('editError').hidden = true;
     const container = document.createDocumentFragment();
     for (const descriptor of fields[resource]) {
-      if (!creating && ['recipe_id', 'auth_user_id'].includes(descriptor.key)) continue;
+      if (!creating && (descriptor.createOnly || ['recipe_id', 'auth_user_id'].includes(descriptor.key))) continue;
       const wrap = document.createElement('div');
       wrap.className = 'field' + (descriptor.wide ? ' wide' : '') + (descriptor.type === 'checkbox' ? ' checkbox' : '');
       const label = document.createElement('label');
@@ -435,9 +461,11 @@
       input.id = id;
       input.name = descriptor.key;
       input.required = !!descriptor.required;
+      if (descriptor.type === 'password') input.autocomplete = 'new-password';
       if (resource === 'users' && descriptor.key === 'email' && item?.email?.toLowerCase() === 'rgardanier@gmail.com') input.readOnly = true;
       if (descriptor.max) input.maxLength = descriptor.max;
-      if (descriptor.min !== undefined) input.min = String(descriptor.min);
+      if (descriptor.type === 'password' && descriptor.min !== undefined) input.minLength = descriptor.min;
+      if (descriptor.min !== undefined && descriptor.type === 'number') input.min = String(descriptor.min);
       if (descriptor.max !== undefined && descriptor.type === 'number') input.max = String(descriptor.max);
       if (descriptor.step) input.step = descriptor.step;
       const value = fieldValue(resource, descriptor.key, item, ownerId);
@@ -452,7 +480,7 @@
       container.append(wrap);
     }
     $('editFields').replaceChildren(container);
-    $('saveButton').textContent = creating ? resource === 'users' ? 'Send invitation' : 'Create record' : 'Save changes';
+    $('saveButton').textContent = creating ? resource === 'users' ? 'Create account' : 'Create record' : 'Save changes';
     $('editDialog').showModal();
   }
 
@@ -465,7 +493,11 @@
   function readFields(resource, creating) {
     const form = $('editForm');
     const value = key => form.elements.namedItem(key)?.value.trim() || '';
-    if (resource === 'users') return { email: value('email'), display_name: value('display_name') };
+    if (resource === 'users') {
+      const result = { email: value('email'), display_name: value('display_name') };
+      if (creating) result.password = form.elements.namedItem('password').value;
+      return result;
+    }
     if (resource === 'recipes') {
       const ingredientLines = value('ingredients').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       const ingredients = ingredientLines.map((line, index) => {
@@ -521,11 +553,13 @@
       $('editDialog').close();
       state.editing = null;
       await chooseResource(resource, state.resource === resource ? state.page : 1);
-      notice(item ? 'Record updated.' : resource === 'users' ? 'Invitation sent.' : 'Record created.');
+      notice(item ? 'Record updated.' : resource === 'users' ? 'Account created. Share its password privately.' : 'Record created.');
     } catch (failure) {
       $('editError').textContent = failure.message || 'Could not save this record.';
       $('editError').hidden = false;
     } finally {
+      const passwordField = $('editForm').elements.namedItem('password');
+      if (passwordField) passwordField.value = '';
       button.disabled = false;
     }
   }
@@ -542,6 +576,10 @@
   $('previousButton').addEventListener('click', () => chooseResource(state.resource, state.page - 1));
   $('nextButton').addEventListener('click', () => chooseResource(state.resource, state.page + 1));
   $('editForm').addEventListener('submit', saveEditor);
+  $('editDialog').addEventListener('close', () => {
+    const passwordField = $('editForm').elements.namedItem('password');
+    if (passwordField) passwordField.value = '';
+  });
   $('closeDialog').addEventListener('click', () => $('editDialog').close());
   $('cancelEdit').addEventListener('click', () => $('editDialog').close());
   initialize().catch(error => notice(error.message || 'Sign-in is unavailable.', true));

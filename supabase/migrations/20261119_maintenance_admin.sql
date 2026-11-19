@@ -90,6 +90,52 @@ $$;
 revoke all on function public.maintenance_admin_user_ids() from public, anon, authenticated;
 grant execute on function public.maintenance_admin_user_ids() to service_role;
 
+-- Only the pinned site owner can grant a confirmed Auth account maintenance
+-- access. The Edge Function passes its independently verified caller UUID.
+-- Matching the target UUID and email prevents granting a stale list entry.
+create or replace function public.grant_maintenance_admin_user(
+  p_actor_id uuid,
+  p_user_id uuid,
+  p_expected_email text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1
+      from app_private.okr_admin_account a
+      join auth.users actor on actor.id = a.user_id
+      where a.singleton
+        and a.user_id = p_actor_id
+        and pg_catalog.lower(actor.email) = 'rgardanier@gmail.com'
+        and actor.email_confirmed_at is not null
+        and not coalesce(actor.is_anonymous, false)
+  ) then
+    raise exception 'Only the site owner can grant maintenance access.' using errcode = '42501';
+  end if;
+
+  if not exists (
+    select 1 from auth.users target
+      where target.id = p_user_id
+        and pg_catalog.lower(target.email) = pg_catalog.lower(p_expected_email)
+        and target.email_confirmed_at is not null
+        and not coalesce(target.is_anonymous, false)
+  ) then
+    return false;
+  end if;
+
+  insert into app_private.maintenance_admin_account (user_id)
+    values (p_user_id)
+    on conflict (user_id) do nothing;
+  return true;
+end;
+$$;
+revoke all on function public.grant_maintenance_admin_user(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.grant_maintenance_admin_user(uuid, uuid, text) to service_role;
+
 -- The OKR dashboard pins one Auth UUID and requires its original email.
 -- Keep that email stable while allowing the maintainer to edit its name.
 create or replace function public.is_okr_admin_user(p_user_id uuid)

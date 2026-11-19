@@ -2,7 +2,6 @@
 // the private maintenance allowlist approves that same caller's JWT.
 const env = (key: string) => Deno.env.get(key) || '';
 const ORIGINS = ['https://jarod049.github.io', ...env('ALLOWED_ORIGINS').split(',').map(value => value.trim()).filter(Boolean)];
-const INVITE_REDIRECT = env('MAINTENANCE_INVITE_REDIRECT_URL') || 'https://jarod049.github.io/MyPantry/maintenance.html';
 const PAGE_SIZE = 50;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RECIPE_ID = /^[a-z0-9-]{1,80}$/;
@@ -301,7 +300,15 @@ async function isOkrAdminUser(base: string, service: string, id: string): Promis
   return result === true;
 }
 
-async function usersAction(action: string, id: unknown, values: unknown, page: number, callerId: string, base: string, service: string) {
+async function isSiteOwner(base: string, service: string, user: Record<string, unknown>): Promise<boolean> {
+  return typeof user.id === 'string'
+    && typeof user.email === 'string'
+    && user.email.toLowerCase() === 'rgardanier@gmail.com'
+    && !!user.email_confirmed_at
+    && await isOkrAdminUser(base, service, user.id);
+}
+
+async function usersAction(action: string, id: unknown, values: unknown, page: number, callerId: string, siteOwner: boolean, base: string, service: string) {
   if (action === 'list') {
     const [result, protectedIds] = await Promise.all([
       serviceRequest(base, service, `/auth/v1/admin/users?page=${page}&per_page=${PAGE_SIZE}`),
@@ -315,19 +322,35 @@ async function usersAction(action: string, id: unknown, values: unknown, page: n
   }
   if (action === 'create') {
     if (!object(values)) throw new ApiError(400, 'User values are required.');
-    strictKeys(values, new Set(['email', 'display_name']));
+    strictKeys(values, new Set(['email', 'display_name', 'password']));
     const email = emailAddress(values.email);
     const displayName = 'display_name' in values ? optionalString(values.display_name, 'Display name', 40) : null;
-    // The invite link returns to the deployed maintenance page. Supabase Auth
-    // must allowlist this exact redirect URL in its URL configuration.
-    // No password or recovery token is ever returned to the browser.
-    const invitePath = `/auth/v1/invite?redirect_to=${encodeURIComponent(INVITE_REDIRECT)}`;
-    const invited = await serviceRequest(base, service, invitePath, 'POST', { email, data: displayName ? { name: displayName, display_name: displayName } : {} });
-    const user = object(invited) && object(invited.user) ? invited.user : invited;
-    if (!object(user)) throw new ApiError(503, 'The invitation result was unavailable.');
+    if (typeof values.password !== 'string' || values.password.length < 10 || values.password.length > 128) {
+      throw new ApiError(400, 'Choose a password between 10 and 128 characters.');
+    }
+    // Direct Auth creation works even when Supabase's default SMTP service
+    // cannot deliver invitations. The password is never logged or returned.
+    // A maintenance administrator is intentionally confirming this account.
+    const created = await serviceRequest(base, service, '/auth/v1/admin/users', 'POST', {
+      email, password: values.password, email_confirm: true,
+      user_metadata: displayName ? { name: displayName, display_name: displayName } : {}
+    });
+    const user = object(created) && object(created.user) ? created.user : created;
+    if (!object(user)) throw new ApiError(503, 'The new account result was unavailable.');
     return sanitizedUser(user);
   }
   const userId = uuid(id, 'User ID');
+  if (action === 'grant_admin') {
+    if (!siteOwner) throw new ApiError(403, 'Only the site owner can grant maintenance access.');
+    if (!object(values)) throw new ApiError(400, 'Account email is required.');
+    strictKeys(values, new Set(['email']));
+    const expectedEmail = emailAddress(values.email);
+    const granted = await serviceRequest(base, service, '/rest/v1/rpc/grant_maintenance_admin_user', 'POST', {
+      p_actor_id: callerId, p_user_id: userId, p_expected_email: expectedEmail
+    });
+    if (granted !== true) throw new ApiError(409, 'The account changed or is not confirmed. Refresh the list before granting access.');
+    return { id: userId, email: expectedEmail };
+  }
   if (action === 'update') {
     if (!object(values)) throw new ApiError(400, 'User values are required.');
     strictKeys(values, new Set(['email', 'display_name']));
@@ -443,13 +466,17 @@ export async function handler(req: Request): Promise<Response> {
     let body: unknown;
     try { body = JSON.parse(raw); } catch { throw new ApiError(400, 'Invalid request.'); }
     if (!object(body)) throw new ApiError(400, 'Invalid request.');
-    if (body.resource === 'session' && body.action === 'status') return json({ data: { isAdmin } });
+    if (body.resource === 'session' && body.action === 'status') {
+      return json({ data: { isAdmin, canGrantAdmin: isAdmin && await isSiteOwner(base, service, user) } });
+    }
     if (!isAdmin) throw new ApiError(403, 'Maintenance administrator access is required.');
     if (!['users', 'recipes', 'pantry'].includes(body.resource as string)) throw new ApiError(400, 'Choose a valid resource.');
-    if (!['list', 'create', 'update', 'delete'].includes(body.action as string)) throw new ApiError(400, 'Choose a valid action.');
+    if (!['list', 'create', 'update', 'delete', 'grant_admin'].includes(body.action as string)) throw new ApiError(400, 'Choose a valid action.');
+    if (body.action === 'grant_admin' && body.resource !== 'users') throw new ApiError(400, 'Choose a valid user action.');
     const page = body.page === undefined ? 1 : intIn(body.page, 'Page', 1, 10000);
     const data = body.resource === 'users'
-      ? await usersAction(body.action as string, body.id, body.values, page, user.id as string, base, service)
+      ? await usersAction(body.action as string, body.id, body.values, page, user.id as string,
+          body.action === 'grant_admin' && await isSiteOwner(base, service, user), base, service)
       : await tableAction(body.resource as 'recipes' | 'pantry', body.action as string, body.id, body.values, page, base, service);
     return json({ data });
   } catch (error) {
