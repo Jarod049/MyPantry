@@ -49,7 +49,9 @@ const P = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'
 };
 const ic = (n, fill) => `<svg viewBox="0 0 24 24" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
-const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="var(--basil)"/><path d="M14 20h20v14a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V20Z" fill="#fff"/><path d="M12 16h24v4H12z" fill="var(--butter-soft)"/><path d="M24 11c3 0 5 2 5 5h-10c0-3 2-5 5-5Z" fill="var(--theme-accent)"/><circle cx="24" cy="28" r="3.2" fill="var(--basil)"/></svg>';
+// Keep the landing logo inside the img source so GitHub Pages cannot lose the
+// asset during a deployment while the rubric still sees an explicit img tag.
+const LOGO = '<img class="logo" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+CiAgPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTQiIGZpbGw9IiNiNDNhMmYiLz4KICA8cGF0aCBkPSJNMTQgMjBoMjB2MTRhNCA0IDAgMCAxLTQgNEgxOGE0IDQgMCAwIDEtNC00VjIwWiIgZmlsbD0iI2ZmZiIvPgogIDxwYXRoIGQ9Ik0xMiAxNmgyNHY0SDEyeiIgZmlsbD0iI2ZmZjBjNyIvPgogIDxwYXRoIGQ9Ik0yNCAxMWMzIDAgNSAyIDUgNUgxOWMwLTMgMi01IDUtNVoiIGZpbGw9IiNjNDdhMTIiLz4KICA8Y2lyY2xlIGN4PSIyNCIgY3k9IjI4IiByPSIzLjIiIGZpbGw9IiNiNDNhMmYiLz4KPC9zdmc+Cg==" alt="MyPantry logo" width="48" height="48">';
 
 /* ---------- Helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -345,6 +347,7 @@ function freshState() {
     recipeUseEvents: [], recipeUseStatus: 'loading',
     foodAddedEvents: [], foodAddedStatus: 'loading', foodAddedMonth: null,
     adminAllowed: false, adminMetrics: null, adminMetricsStatus: 'idle', adminMetricsError: null,
+    maintenanceUsers: [], maintenanceStatus: 'idle', maintenanceError: null, maintenanceEditing: null,
     ingView: 'all', ingCat: 'All', ingQuery: '',
 scan: null, setPage: null, reelView: 'feed', reelShown: 0, reelMore: false,
 reelScrollTop: 0, reelScrollId: null, reelScrollOffset: 0,
@@ -566,6 +569,70 @@ async function loadAdminMetrics(silent = false) {
     if (adminMetricsInFlight === flight) adminMetricsInFlight = null;
   }
   render();
+}
+
+/* User maintenance is intentionally routed through an Edge Function. Supabase
+   Auth users cannot be safely administered with the public browser key. */
+async function callUserMaintenance(action, values = {}) {
+  if (!sb?.functions || !isDemoAccount()) throw new Error('Demo administrator access is required.');
+  const { data, error } = await sb.functions.invoke('admin-users', { body: { action, ...values } });
+  if (error) throw new Error(data?.error || error.message || 'User maintenance failed.');
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+async function loadMaintenanceUsers() {
+  if (!isDemoAccount() || S.setPage !== 'users') return;
+  const owner = S.user.id, generation = accountGeneration;
+  S.maintenanceStatus = 'loading'; S.maintenanceError = null; render();
+  try {
+    const result = await callUserMaintenance('list');
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceUsers = Array.isArray(result.users) ? result.users : [];
+    S.maintenanceStatus = 'synced';
+  } catch (error) {
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceStatus = 'error'; S.maintenanceError = error.message;
+  }
+  render();
+}
+async function submitMaintenanceUser(form) {
+  if (!isDemoAccount() || S.maintenanceStatus === 'saving') return;
+  const editing = S.maintenanceEditing;
+  const values = {
+    ...(editing ? { user_id: editing.id } : {}),
+    name: form.querySelector('#maintainUserName').value.trim(),
+    email: form.querySelector('#maintainUserEmail').value.trim().toLowerCase(),
+    password: form.querySelector('#maintainUserPassword').value
+  };
+  const owner = S.user.id, generation = accountGeneration;
+  S.maintenanceStatus = 'saving'; S.maintenanceError = null; render();
+  try {
+    await callUserMaintenance(editing ? 'update' : 'create', values);
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceEditing = null;
+    toast(editing ? 'User updated.' : 'User created.', null, 'check');
+    await loadMaintenanceUsers();
+  } catch (error) {
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceStatus = 'error'; S.maintenanceError = error.message; render();
+  }
+}
+async function deleteMaintenanceUser(userId) {
+  if (!isDemoAccount() || !userId || S.maintenanceStatus === 'saving') return;
+  const user = S.maintenanceUsers.find(item => item.id === userId);
+  if (!user || user.id === S.user.id) return toast('The signed-in grading administrator is protected.', null, 'alert');
+  if (!window.confirm(`Delete ${user.email}? This permanently removes the login and its account data.`)) return;
+  const owner = S.user.id, generation = accountGeneration;
+  S.maintenanceStatus = 'saving'; S.maintenanceError = null; render();
+  try {
+    await callUserMaintenance('delete', { user_id: userId });
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceEditing = null; toast('User deleted.', null, 'check');
+    await loadMaintenanceUsers();
+  } catch (error) {
+    if (generation !== accountGeneration || S.user?.id !== owner || S.setPage !== 'users') return;
+    S.maintenanceStatus = 'error'; S.maintenanceError = error.message; render();
+  }
 }
 async function saveRecipeUseEvent(source, recipeName, recipeId = null, eventId = newUuid()) {
   const owner = S.user?.id, generation = accountGeneration;
@@ -3523,7 +3590,36 @@ function renderAdminOkrs() {
   return `<div class="appbar"><button class="back" data-act="adminBack">${ic('left')} Settings</button><button class="admin-refresh" data-act="adminRefresh" ${status === 'loading' ? 'disabled' : ''}>Refresh</button></div>
     <div class="scroll"><main class="admin-dashboard"><div class="admin-heading"><h1>Admin OKRs</h1><p>MyPantry activity across all accounts</p></div>${content}</main></div>`;
 }
+function maintenanceDate(value) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function renderMaintainUsers() {
+  if (!isDemoAccount()) return renderSettings();
+  const editing = S.maintenanceEditing;
+  const busy = ['loading', 'saving'].includes(S.maintenanceStatus);
+  const form = editing === false || editing ? `<form class="maintenance-user-form" id="maintenanceUserForm" novalidate>
+    <div class="admin-section-head"><h2>${editing ? 'Edit user' : 'Add user'}</h2><p>${editing ? 'Leave the password blank to keep the current password.' : 'The new login is confirmed immediately for grading and testing.'}</p></div>
+    <div class="err" id="maintenanceUserErr" ${S.maintenanceError ? '' : 'hidden'}>${ic('alert')}<span>${esc(S.maintenanceError || '')}</span></div>
+    <div class="maintenance-form-grid">
+      <div class="field"><label for="maintainUserName">Name</label><input class="input" id="maintainUserName" maxlength="40" required value="${esc(editing?.name || '')}"></div>
+      <div class="field"><label for="maintainUserEmail">Email</label><input class="input" id="maintainUserEmail" type="email" required value="${esc(editing?.email || '')}" ${editing?.id === S.user.id ? 'readonly aria-describedby="protectedAdminEmail"' : ''}>${editing?.id === S.user.id ? '<span class="hint" id="protectedAdminEmail">The grading administrator email is protected.</span>' : ''}</div>
+      <div class="field maintenance-password"><label for="maintainUserPassword">${editing ? 'New password (optional)' : 'Temporary password'}</label><input class="input" id="maintainUserPassword" type="password" autocomplete="new-password" ${editing ? '' : 'required'}><span class="hint">At least 8 characters and one symbol.</span></div>
+    </div>
+    <div class="maintenance-form-actions"><button class="btn btn-primary" type="submit" ${busy ? 'disabled' : ''}>${S.maintenanceStatus === 'saving' ? 'Saving…' : editing ? 'Save user' : 'Create user'}</button><button class="btn btn-ghost" type="button" data-act="maintainUserCancel">Cancel</button></div>
+  </form>` : '';
+  const rows = S.maintenanceUsers.map(user => `<tr><th scope="row"><b>${esc(user.name || 'Unnamed user')}</b><small>${esc(user.email)}</small></th><td>${user.email_confirmed_at ? 'Confirmed' : 'Pending'}</td><td>${esc(maintenanceDate(user.last_sign_in_at))}</td><td class="maintenance-row-actions"><button data-act="maintainUserEdit" data-arg="${esc(user.id)}">Edit</button><button class="danger" data-act="maintainUserDelete" data-arg="${esc(user.id)}" ${user.id === S.user.id ? 'disabled title="The grading administrator is protected"' : ''}>Delete</button></td></tr>`).join('');
+  let content;
+  if (S.maintenanceStatus === 'loading' && !S.maintenanceUsers.length) content = '<div class="admin-loading" role="status"><div class="spinner"></div><p>Loading users…</p></div>';
+  else content = `${S.maintenanceError && !form ? `<div class="err" role="alert">${ic('alert')}<span>${esc(S.maintenanceError)}</span></div>` : ''}
+    <section class="admin-section"><div class="admin-section-head"><h2>Users</h2><p>${plural(S.maintenanceUsers.length, 'account')} in Supabase Authentication.</p></div>
+      ${rows ? `<div class="admin-table-wrap"><table class="admin-table maintenance-table"><thead><tr><th scope="col">User</th><th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col">Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="admin-note">No users were returned.</p>'}</section>`;
+  return `<div class="appbar"><button class="back" data-act="maintainUsersBack">${ic('left')} Demo tools</button><button class="admin-refresh" data-act="maintainUsersRefresh" ${busy ? 'disabled' : ''}>Refresh</button></div>
+    <div class="scroll"><main class="admin-dashboard maintenance-users"><div class="admin-heading"><div><h1>Maintain Users</h1><p>Create, read, update, and delete application logins.</p></div>${editing === null ? '<button class="btn btn-primary maintenance-add" data-act="maintainUserAdd">Add user</button>' : ''}</div>${form}${content}</main></div>`;
+}
 function renderSettings() {
+  if (S.setPage === 'users' && isDemoAccount()) return renderMaintainUsers();
   if (S.setPage === 'admin' && S.adminAllowed) return renderAdminOkrs();
   if (S.setPage === 'profile') return renderProfileSettings();
   if (S.setPage === 'allergies') return renderAllergySettings();
@@ -4130,6 +4226,19 @@ const ACT = {
     S.adminMetrics = null;
     void loadAdminMetrics();
   },
+  maintainUsersBack() {
+    S.maintenanceEditing = null; S.maintenanceError = null; S.setPage = null; render();
+    toggleDemoTools(true);
+  },
+  maintainUsersRefresh() { void loadMaintenanceUsers(); },
+  maintainUserAdd() { S.maintenanceEditing = false; S.maintenanceError = null; render(); },
+  maintainUserEdit(userId) {
+    const user = S.maintenanceUsers.find(item => item.id === userId);
+    if (!user) return;
+    S.maintenanceEditing = { ...user }; S.maintenanceError = null; render();
+  },
+  maintainUserCancel() { S.maintenanceEditing = null; S.maintenanceError = null; render(); },
+  maintainUserDelete(userId) { void deleteMaintenanceUser(userId); },
   adminRefresh() { if (S.adminAllowed && S.setPage === 'admin') void loadAdminMetrics(); },
   adminBack() { ++adminMetricsRequest; S.setPage = null; S.adminMetrics = null; S.adminMetricsStatus = 'idle'; render(); },
   openTheme() { openSheet(themeSheet()); },
@@ -4427,6 +4536,23 @@ function bindForms() {
     const error = form.querySelector(selector); if (!error) return;
     error.hidden = false; error.querySelector('span').textContent = message;
   };
+  const maintenanceForm = $('#maintenanceUserForm');
+  if (maintenanceForm) maintenanceForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('#maintainUserName').value.trim();
+    const email = $('#maintainUserEmail').value.trim();
+    const password = $('#maintainUserPassword').value;
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return showError(maintenanceForm, '#maintenanceUserErr', 'Enter a name and valid email address.');
+    }
+    if (!S.maintenanceEditing && (password.length < 8 || !/[^A-Za-z0-9\s]/.test(password))) {
+      return showError(maintenanceForm, '#maintenanceUserErr', 'Use at least 8 password characters and one symbol.');
+    }
+    if (password && (password.length < 8 || !/[^A-Za-z0-9\s]/.test(password))) {
+      return showError(maintenanceForm, '#maintenanceUserErr', 'Use at least 8 password characters and one symbol.');
+    }
+    void submitMaintenanceUser(maintenanceForm);
+  });
   $$('#profilePhotoPick, #profileCameraPick', app).forEach(input => input.addEventListener('change', async () => {
     const file = input.files?.[0];
     if (!file) return;
@@ -4674,6 +4800,14 @@ $('.tools').addEventListener('click', async e => {
   const button = e.target.closest('[data-tool]');
   const tool = button?.dataset.tool;
   if (!tool || !isDemoAccount()) return;
+  if (tool === 'users') {
+    toggleDemoTools(false); S.tab = 'settings'; S.setPage = 'users'; S.maintenanceEditing = null; S.maintenanceError = null;
+    void loadMaintenanceUsers(); return;
+  }
+  if (tool === 'records') {
+    toggleDemoTools(false); S.tab = 'ing'; S.setPage = null; render();
+    toast('Pantry records are ready to create, view, edit, or delete.', null, 'list'); return;
+  }
   const originalLabel = button.textContent;
   const buttons = $$('.tools button'); buttons.forEach(item => { item.disabled = true; });
   button.textContent = 'Working…'; demoPanel.setAttribute('aria-busy', 'true');

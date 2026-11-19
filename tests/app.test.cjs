@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 const user = id => ({ id, email: `${id}@example.test`, user_metadata: { name: id } });
-function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good', likeCounts } = {}) {
+function boot({ id = null, storage = {}, navigation = {}, config = {}, load, database, tables = {}, insertError, insertWait, barcodeResult, camera, accountUpdate, metadata = {}, noCatalog = false, canvasQuality = 'good', likeCounts, maintenanceUsers } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), {
     url: 'https://mypantry.example.test/', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -97,6 +97,28 @@ function boot({ id = null, storage = {}, navigation = {}, config = {}, load, dat
             return { data: filePaths.map(name => ({ name })), error: null };
           }
         };
+      }
+    },
+    functions: {
+      async invoke(name, { body }) {
+        queries.push({ function: name, body });
+        if (name !== 'admin-users' || !maintenanceUsers) return { data: null, error: new Error('missing function') };
+        if (body.action === 'list') return { data: { users: maintenanceUsers.map(item => ({ ...item })) }, error: null };
+        if (body.action === 'create') {
+          const created = { id: `created-${maintenanceUsers.length + 1}`, email: body.email, name: body.name, email_confirmed_at: new Date().toISOString(), created_at: new Date().toISOString(), last_sign_in_at: null };
+          maintenanceUsers.push(created); return { data: { user: created }, error: null };
+        }
+        if (body.action === 'update') {
+          const found = maintenanceUsers.find(item => item.id === body.user_id);
+          if (found) Object.assign(found, { email: body.email || found.email, name: body.name || found.name });
+          return { data: { user: found }, error: null };
+        }
+        if (body.action === 'delete') {
+          const at = maintenanceUsers.findIndex(item => item.id === body.user_id);
+          if (at >= 0) maintenanceUsers.splice(at, 1);
+          return { data: { deleted: body.user_id }, error: null };
+        }
+        return { data: { error: 'unknown action' }, error: null };
       }
     },
     async rpc(name, args) {
@@ -681,6 +703,10 @@ test('login keeps recovery beside the password label and account creation second
   assert.equal(heading.querySelector('label[for="li_pw"]').textContent, 'Password');
   assert.equal(heading.querySelector('[data-arg="forgot"]').textContent, 'Forgot password?');
   assert.equal(form.querySelector('.btn-auth-secondary[data-arg="signup"]').textContent, 'Create an account');
+  const logo = form.querySelector('.auth-hero img.logo');
+  assert.equal(logo.getAttribute('alt'), 'MyPantry logo');
+  assert.match(logo.getAttribute('src'), /^data:image\/svg\+xml;base64,/);
+  assert.equal(form.querySelector('img[alt="An organized pantry with fresh groceries"]'), null);
   assert.doesNotMatch(form.textContent, /You stay signed in until you sign out/);
 });
 test('ordinary connected accounts cannot see demo tools', async t => {
@@ -712,6 +738,34 @@ test('configured Supabase demo account receives tools and simulated scans', asyn
   assert.ok(database.length >= 8 && database.length <= 18);
   assert.ok(database.every(row => row.auth_user_id === 'alice'));
   assert.equal(f.queries.filter(query => query.table === 'pantry_item' && query.delete).length, 1);
+});
+test('demo tools expose the required record and user maintenance buttons', async t => {
+  const database = [{ ingredient_id: 1, auth_user_id: 'alice', ingredient_name: 'Milk', quantity: 1, measurement: 'gal', food_type: 'Dairy & Eggs', expiration_date: '2030-01-01' }];
+  const users = [
+    { id: 'alice', email: 'mypantrydemo@gmail.com', name: 'Demo Admin', email_confirmed_at: '2026-01-01T00:00:00Z', last_sign_in_at: '2026-11-19T00:00:00Z' },
+    { id: 'bob', email: 'bob@example.test', name: 'Bob', email_confirmed_at: '2026-01-02T00:00:00Z', last_sign_in_at: null }
+  ];
+  const f = boot({ id: 'alice', database, maintenanceUsers: users, config: { demoAccountId: 'alice' } });
+  t.after(() => f.dom.window.close()); await tick();
+  assert.equal(f.w.document.querySelector('[data-tool="users"]').textContent, 'Maintain Users');
+  assert.equal(f.w.document.querySelector('[data-tool="records"]').textContent, 'Maintain Records');
+
+  f.click('[data-tool="records"]');
+  assert.match(f.text(), /Ingredients/);
+  assert.match(f.text(), /Milk/);
+
+  f.click('#demoToggle');
+  f.click('[data-tool="users"]'); await tick(); await tick();
+  assert.match(f.text(), /Maintain Users/);
+  assert.match(f.text(), /mypantrydemo@gmail\.com/);
+  assert.match(f.text(), /bob@example\.test/);
+  assert.equal(f.w.document.querySelector('[data-act="maintainUserDelete"][data-arg="alice"]').disabled, true);
+
+  f.click('[data-act="maintainUserAdd"]');
+  f.form('#maintenanceUserForm', { maintainUserName: 'New User', maintainUserEmail: 'new@example.test', maintainUserPassword: 'Password!' });
+  await tick(); await tick(); await tick();
+  assert.match(f.text(), /new@example\.test/);
+  assert.ok(f.queries.some(query => query.function === 'admin-users' && query.body.action === 'create'));
 });
 test('recovery event opens the real password form and keeps it through refresh', async t => {
   const f = boot({ id: 'alice' }); t.after(() => f.dom.window.close()); await tick();

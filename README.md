@@ -24,6 +24,7 @@ Here is our demo: https://jarod049.github.io/MyPantry/
 | Track food added by month and all time | Complete | Ingredients shows monthly additions and an all-time count since tracking began |
 | Plan grocery shopping without entering a ZIP code | Complete | Settings → Shopping → Shop ideas links to the preferred retailer’s offers |
 | Manage account details and preferences | Complete | Settings supports username, email, password, profile photo, allergies, and other preferences |
+| Maintain users and application records after login | Complete after rollout | Demo tools → Maintain Users; Demo tools → Maintain Records. Apply and deploy [USER_MAINTENANCE_SETUP.md](USER_MAINTENANCE_SETUP.md) |
 | Measure the 80% weekly usage OKR | Complete | Run the [weekly session report](supabase/reports/weekly-active-users.sql) in the Supabase SQL Editor |
 | Review four OKRs from an admin account | Complete after migration | Settings → Admin OKRs for the confirmed `rgardanier@gmail.com` account |
 | Use the app on phones, tablets, and desktop | Complete | The layout adapts to screen size |
@@ -54,6 +55,8 @@ Requires Node.js 22 or later.
 
 The demo uses a real Supabase Auth account. Set `DEMO_ACCOUNT_ID` to that account's Auth UUID to reveal Demo tools after it signs in. Never put the Demo password in `.env` or frontend code.
 
+The demo administrator can maintain real Supabase Auth users through a protected Edge Function and can open the existing pantry-record CRUD workflow from Demo tools. Complete [USER_MAINTENANCE_SETUP.md](USER_MAINTENANCE_SETUP.md) before grading.
+
 Use an HTTP server locally, rather than opening `index.html` as a file. `npm run build` generates `dist/config.js` and copies the website files into `dist/`.
 
 ## 5. Authentication
@@ -71,6 +74,8 @@ Food allergy preferences are stored in the existing per-account `recipe_preferen
 ## 6. Deploy
 
 The current site uses GitHub Pages at https://jarod049.github.io/MyPantry/. The deployment workflow generates browser configuration from repository Actions secrets `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, plus the non-secret repository variable `DEMO_ACCOUNT_ID`. The workflow runs the same build as local development, publishes the generated `dist/` folder, and versions asset URLs so browsers can load changed files. Merging to `main` triggers deployment. For optional Netlify hosting, set the same build environment values. Complete [AUTH_SETUP.md](AUTH_SETUP.md) before deployment. Use a preview deployment and verify account isolation before updating production.
+
+For the sprint administration rubric, also apply the demo-maintenance migration and deploy the `admin-users` function as described in [USER_MAINTENANCE_SETUP.md](USER_MAINTENANCE_SETUP.md). Submit the deployed URL and demo credentials privately to the TAs; do not store the password in this repository.
 
 ## 7. Verify
 
