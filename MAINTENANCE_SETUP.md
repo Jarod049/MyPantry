@@ -11,9 +11,9 @@ The IS401 maintenance landing page is `https://jarod049.github.io/MyPantry/maint
 
 ## Production release order
 
-1. Apply `supabase/migrations/20261119_maintenance_admin.sql` to the MyPantry Supabase project. It requires `20261116_admin_okr_dashboard.sql`.
+1. Apply `supabase/migrations/20261119_maintenance_admin.sql` to the MyPantry production Supabase project `llazlrlxjoywqrbconbs`. It requires `20261116_admin_okr_dashboard.sql`.
 2. In Supabase **Authentication → URL Configuration**, add the exact redirect URL `https://jarod049.github.io/MyPantry/maintenance.html`. Keep email sign-in and invitation mail delivery enabled.
-3. Deploy `supabase/functions/maintenance-api` to the same project. The function reads `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` only in the server environment. Supabase provides these built-in values for Edge Functions. Never add the service key to the repository, GitHub Pages, or a public build. If the deployed address differs, set `MAINTENANCE_INVITE_REDIRECT_URL` to its exact allowlisted URL.
+3. Deploy `supabase/functions/maintenance-api` to the same project. Its endpoint will be `https://llazlrlxjoywqrbconbs.supabase.co/functions/v1/maintenance-api`. The function reads `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` only in the server environment. Supabase provides these built-in values for Edge Functions. Never add the service key to the repository, GitHub Pages, or a public build. If the deployed address differs, set `MAINTENANCE_INVITE_REDIRECT_URL` to its exact allowlisted URL.
 4. Merge the website change to `main`; the Pages workflow publishes `dist/maintenance.html` and its assets.
 5. Sign in as the existing `rgardanier@gmail.com` administrator on the maintenance page, open **Maintain Users**, and invite the dedicated account at an inbox the site owner controls. The invitee opens the emailed link, sets a password, and confirms the email if Supabase requests confirmation.
 6. In the Supabase Auth Users screen, copy that specific account's UUID. As a project administrator, grant maintenance access with the following SQL after checking the email and confirmation status. Replace the placeholders before running it:
