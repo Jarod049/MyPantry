@@ -8,7 +8,7 @@
   const sections = ['loginSection', 'passwordSection', 'pendingSection', 'workspace'];
   const fields = {
     users: [
-      { key: 'email', label: 'Email address', type: 'email', required: true },
+      { key: 'email', label: 'Email address', type: 'email', required: true, max: 254 },
       { key: 'display_name', label: 'Display name', type: 'text', max: 40 }
     ],
     recipes: [
@@ -24,12 +24,12 @@
       { key: 'ingredients', label: 'Ingredients', type: 'textarea', required: true, wide: true, hint: 'One per line: matching name ; amount ; display label. Example: eggs ; 2 ; 2 eggs' },
       { key: 'steps', label: 'Directions', type: 'textarea', required: true, wide: true, hint: 'Write one step per line.' },
       { key: 'substitutions', label: 'Substitutions (optional JSON)', type: 'textarea', wide: true, hint: 'Advanced: use the existing recipe format, or leave blank.' },
-      { key: 'video_url', label: 'Video URL', type: 'url', wide: true, hint: 'Optional HTTPS video link.' },
-      { key: 'background', label: 'Card background', type: 'text', wide: true, hint: 'Optional hex color such as #dcebd7. Existing recipe gradients can be kept.' },
+      { key: 'video_url', label: 'Video URL', type: 'url', wide: true, max: 500, hint: 'Optional HTTPS video link.' },
+      { key: 'background', label: 'Card background', type: 'text', wide: true, max: 250, hint: 'Optional hex color such as #dcebd7. Existing recipe gradients can be kept.' },
       { key: 'is_published', label: 'Published in Reels', type: 'checkbox', wide: true }
     ],
     pantry: [
-      { key: 'auth_user_id', label: 'Account owner ID', type: 'text', required: true, wide: true, hint: 'Copy this from Maintain Users. The owner must already have an account.' },
+      { key: 'auth_user_id', label: 'Account owner ID', type: 'text', required: true, wide: true, max: 36, hint: 'Copy this from Maintain Users. The owner must already have an account.' },
       { key: 'ingredient_name', label: 'Food name', type: 'text', required: true, max: 120 },
       { key: 'brand', label: 'Brand', type: 'text', max: 80 },
       { key: 'product_name', label: 'Product name', type: 'text', max: 120 },
@@ -401,7 +401,9 @@
     $('editKicker').textContent = creating ? 'New record' : 'Edit record';
     $('editTitle').textContent = (creating ? 'Add ' : 'Edit ') + ({ users: 'user', recipes: 'recipe', pantry: 'pantry item' }[resource]);
     $('editHelp').textContent = resource === 'users'
-      ? creating ? 'An invitation email lets the person choose their own password.' : 'The account owner may need to confirm a changed email.'
+      ? creating ? 'An invitation email lets the person choose their own password.' : item.email?.toLowerCase() === 'rgardanier@gmail.com'
+        ? 'This account controls the OKR dashboard, so its sign-in email is locked. You can update its display name.'
+        : 'The account owner may need to confirm a changed email.'
       : resource === 'recipes' ? 'Save the recipe as unpublished while you review it. Published recipes appear in Reels.'
         : 'Food records belong to an account. Maintenance edits do not count as new food added in the Ingredients tracker.';
     $('editError').hidden = true;
@@ -433,6 +435,7 @@
       input.id = id;
       input.name = descriptor.key;
       input.required = !!descriptor.required;
+      if (resource === 'users' && descriptor.key === 'email' && item?.email?.toLowerCase() === 'rgardanier@gmail.com') input.readOnly = true;
       if (descriptor.max) input.maxLength = descriptor.max;
       if (descriptor.min !== undefined) input.min = String(descriptor.min);
       if (descriptor.max !== undefined && descriptor.type === 'number') input.max = String(descriptor.max);
